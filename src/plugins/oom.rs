@@ -7,10 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
-    config::{Action, ActionPlan, AppConfig, EscalationStep, OomConfig},
+    config::{Action, ActionPlan, AppConfig, OomConfig},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
     util,
 };
@@ -20,6 +20,11 @@ pub fn journalctl_exists() -> bool {
 }
 
 pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<Child> {
+    info!(
+        pattern_count = patterns.len(),
+        "starting OOM journal watcher: journalctl -kf -n 0"
+    );
+
     let mut child = Command::new("/usr/bin/journalctl")
         .args(["-kf", "-n", "0"])
         .stdin(Stdio::null())
@@ -54,10 +59,12 @@ pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<
             let lower = line.to_lowercase();
 
             if patterns.iter().any(|p| lower.contains(p)) {
-                warn!(target = "oom", "OOM pattern matched: {}", line);
+                warn!(target = "oom", journal_line = %line, "OOM pattern matched");
                 let _ = oom_tx.send(());
             }
         }
+
+        warn!(target = "oom", "OOM journal watcher stdout ended");
     });
 
     Ok(child)
@@ -90,6 +97,7 @@ impl OomPlugin {
 
     fn stop_watcher(&mut self) {
         if let Some(mut child) = self.child.take() {
+            info!("stopping OOM journal watcher");
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -119,6 +127,8 @@ impl OomPlugin {
         self.child = Some(spawn_watcher(self.cfg.patterns.clone(), self.tx.clone())?);
         self.signature = Some(desired_signature);
 
+        info!("OOM journal watcher active");
+
         Ok(())
     }
 }
@@ -139,7 +149,7 @@ impl Plugin for OomPlugin {
     }
 
     fn description(&self) -> &'static str {
-        "Watches journald for OOM messages"
+        "Watches journald for OOM messages and immediately requests reboot"
     }
 
     fn enabled(&self) -> bool {
@@ -148,10 +158,6 @@ impl Plugin for OomPlugin {
 
     fn interval(&self) -> Duration {
         self.interval
-    }
-
-    fn escalation_steps(&self) -> Vec<EscalationStep> {
-        vec![EscalationStep::new(1, Action::Reboot)]
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -164,9 +170,17 @@ impl Plugin for OomPlugin {
 
     fn update_config(&mut self, cfg: &AppConfig) {
         let old_patterns = self.cfg.patterns.clone();
+        let was_enabled = self.cfg.enabled;
 
         self.cfg = cfg.oom.clone();
         self.interval = cfg.global.tick;
+
+        if was_enabled != self.cfg.enabled {
+            info!(
+                enabled = self.cfg.enabled,
+                "OOM plugin enabled state changed"
+            );
+        }
 
         if self.signature.as_ref() != Some(&old_patterns) {
             self.signature = None;
@@ -193,7 +207,7 @@ impl Plugin for OomPlugin {
         PluginStatus::healthy(
             self.id(),
             format!(
-                "journalctl watcher configured, {} pattern(s)",
+                "event-immediate reboot configured, {} pattern(s)",
                 self.cfg.patterns.len()
             ),
         )
@@ -253,12 +267,19 @@ impl Plugin for OomPlugin {
         }
 
         let mut detected = false;
+        let mut event_count = 0_u32;
 
         while self.rx.try_recv().is_ok() {
             detected = true;
+            event_count += 1;
         }
 
         if detected {
+            warn!(
+                event_count,
+                "OOM event detected; immediate reboot remediation requested"
+            );
+
             TickOutcome::Failure {
                 plugin: self.id(),
                 failures: 1,

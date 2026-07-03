@@ -22,8 +22,11 @@ pub const DEFAULT_CONFIG: &str = r#"# Watchguard configuration
 #   - plugins start disabled
 #   - network and DNS remediation defaults to action = "none"
 #
-# Escalation is the only remediation model. A plugin's failure counter resets
-# only when its probe succeeds.
+# Polling checks use escalation. A plugin's failure counter resets only when
+# its probe succeeds.
+#
+# OOM is event-driven and immediately requests reboot on the first matched
+# kernel OOM journal event, subject to boot grace and reboot cooldown.
 
 [global]
 log_level = "info"
@@ -39,6 +42,8 @@ reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
 [oom]
 enabled = false
 
+# OOM does not use failure_actions. A matched OOM journal event immediately
+# requests a reboot, subject to boot grace and reboot cooldown.
 patterns = [
   "out of memory: kill process",
   "invoked oom-killer",
@@ -120,6 +125,8 @@ const DEFAULT_OOM_SECTION: &str = r#"
 [oom]
 enabled = false
 
+# OOM does not use failure_actions. A matched OOM journal event immediately
+# requests a reboot, subject to boot grace and reboot cooldown.
 patterns = [
   "out of memory: kill process",
   "invoked oom-killer",
@@ -651,7 +658,7 @@ pub fn cmd_config_validate(config_path: &str) -> Result<()> {
             println!("✅ SSH plugin");
             println!("✅ Network plugin");
             println!("✅ DNS plugin");
-            println!("✅ Escalation plans");
+            println!("✅ Remediation policy");
             println!();
             println!("Configuration is valid.");
             Ok(())

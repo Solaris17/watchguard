@@ -16,7 +16,7 @@ It can monitor SSH service health, SSH TCP reachability, outbound network reacha
 Watchguard can restart services, run commands, or reboot the host depending on configuration. Reboot actions are protected by boot grace and reboot cooldown settings.
 
 .SH ACTIONS
-Watchguard uses one remediation model: escalation steps.
+Watchguard uses a generic action engine. Polling checks use escalation steps. OOM is event-driven and immediately requests reboot on the first matched OOM journal event.
 
 Supported actions are:
 
@@ -43,7 +43,7 @@ Run the configured
 command, subject to boot grace and reboot cooldown.
 
 .SH ESCALATION
-Every enabled check uses an escalation list.
+Polling checks use escalation lists. OOM does not use an escalation list; it immediately requests reboot when an OOM journal event is matched.
 
 Escalation example:
 
@@ -87,7 +87,7 @@ all configured plugins are tested even if disabled.
 
 .TP
 .B watchguard plugins [--config PATH]
-List registered plugins, metadata, enabled state, and escalation plans.
+List registered plugins, metadata, enabled state, and remediation policies.
 
 .TP
 .B watchguard logs [--unit UNIT] [--since TIME] [-n LINES] [-b|--boot] [--no-follow]
@@ -108,7 +108,7 @@ Disable a plugin or sub-check.
 .SH PLUGINS
 .TP
 .B oom
-Watches journald for OOM messages.
+Watches journald for OOM messages and immediately requests reboot on first match, subject to boot grace and reboot cooldown.
 
 .TP
 .B ssh-service
@@ -174,6 +174,41 @@ failure_actions = [
 
 Only use reboot escalation after validating targets.
 
+.SH OOM IMMEDIATE REBOOT POLICY
+OOM is intentionally different from SSH, network, and DNS checks. It is event-driven instead of failure-count driven.
+
+.EX
+[oom]
+enabled = true
+.EE
+
+When Watchguard sees a configured OOM journal pattern, it immediately requests reboot. The reboot request is still protected by:
+
+.EX
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+.EE
+
+There is no failure_actions list for OOM.
+
+
+.SH LOGGING
+Watchguard logs to journald through the
+.B watchguard.service
+unit.
+
+Useful commands:
+
+.EX
+watchguard logs
+watchguard logs --boot --no-follow
+journalctl -u watchguard.service -f
+.EE
+
+Watchguard logs daemon startup, plugin registration, plugin failures, recoveries, OOM watcher lifecycle, matched OOM journal lines, remediation decisions, remediation command success/failure, and reboot suppression due to boot grace or cooldown.
+
+Successful checks are not logged every tick at normal info level to avoid log spam.
+
 .SH CONFIGURATION
 The default configuration file is:
 
@@ -213,7 +248,7 @@ Run diagnostics:
 watchguard doctor
 .EE
 
-Show plugins and escalation plans:
+Show plugins and remediation policies:
 
 .EX
 watchguard plugins

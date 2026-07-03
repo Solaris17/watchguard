@@ -3,7 +3,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::config::{Action, ActionPlan, AppConfig};
 
@@ -49,14 +49,14 @@ pub fn act(
 ) {
     match plan.action {
         Action::None => {
-            warn!(reason, "action=none; no remediation taken");
+            info!(reason, "remediation skipped: action=none");
         }
 
         Action::RestartService => {
             let Some(service) = plan.service.as_deref().filter(|s| !s.trim().is_empty()) else {
                 error!(
                     reason,
-                    "action=restart_service but no service was configured"
+                    "remediation invalid: action=restart_service but no service was configured"
                 );
                 return;
             };
@@ -67,23 +67,57 @@ pub fn act(
                 service.to_string(),
             ];
 
-            warn!(reason, service, "action=restart_service");
+            warn!(
+                reason,
+                service,
+                command=?argv,
+                "remediation starting: restart_service"
+            );
 
-            if let Err(e) = run_cmd(&argv) {
-                error!(error=?e, service, "failed to restart service");
+            match run_cmd(&argv) {
+                Ok(()) => info!(
+                    reason,
+                    service,
+                    command=?argv,
+                    "remediation succeeded: restart_service"
+                ),
+                Err(e) => error!(
+                    reason,
+                    service,
+                    command=?argv,
+                    error=?e,
+                    "remediation failed: restart_service"
+                ),
             }
         }
 
         Action::RunCommand => {
             if plan.command.is_empty() {
-                error!(reason, "action=run_command but command was empty");
+                error!(
+                    reason,
+                    "remediation invalid: action=run_command but command was empty"
+                );
                 return;
             }
 
-            warn!(reason, command=?plan.command, "action=run_command");
+            warn!(
+                reason,
+                command=?plan.command,
+                "remediation starting: run_command"
+            );
 
-            if let Err(e) = run_cmd(&plan.command) {
-                error!(error=?e, command=?plan.command, "configured command failed");
+            match run_cmd(&plan.command) {
+                Ok(()) => info!(
+                    reason,
+                    command=?plan.command,
+                    "remediation succeeded: run_command"
+                ),
+                Err(e) => error!(
+                    reason,
+                    command=?plan.command,
+                    error=?e,
+                    "remediation failed: run_command"
+                ),
             }
         }
 
@@ -98,7 +132,7 @@ pub fn act(
                 warn!(
                     reason,
                     remaining=?remaining,
-                    "boot grace active; reboot suppressed"
+                    "remediation suppressed: reboot blocked by boot grace"
                 );
                 return;
             }
@@ -107,16 +141,31 @@ pub fn act(
                 warn!(
                     reason,
                     remaining=?remaining,
-                    "reboot cooldown active; reboot suppressed"
+                    "remediation suppressed: reboot blocked by cooldown"
                 );
                 return;
             }
 
-            warn!(reason, "action=reboot");
+            warn!(
+                reason,
+                command=?cfg.commands.reboot,
+                "remediation starting: reboot"
+            );
+
             *last_reboot_attempt = Some(Instant::now());
 
-            if let Err(e) = run_cmd(&cfg.commands.reboot) {
-                error!(error=?e, "failed to run reboot command");
+            match run_cmd(&cfg.commands.reboot) {
+                Ok(()) => info!(
+                    reason,
+                    command=?cfg.commands.reboot,
+                    "remediation command accepted: reboot"
+                ),
+                Err(e) => error!(
+                    reason,
+                    command=?cfg.commands.reboot,
+                    error=?e,
+                    "remediation failed: reboot command"
+                ),
             }
         }
     }

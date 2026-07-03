@@ -17,14 +17,17 @@ pub fn cmd_plugins(config_path: &str) -> Result<()> {
 
     for plugin in plugins.iter_mut() {
         let status = plugin.status(&rt);
-        let plan = resolved_escalation_steps_for(plugin.as_ref());
+        let remediation = plugin
+            .remediation_summary()
+            .unwrap_or_else(|| format_plan(&resolved_escalation_steps_for(plugin.as_ref())));
 
         println!("{} {}", status.health.icon(), plugin.id());
         println!("   Name        : {}", plugin.name());
         println!("   Description : {}", plugin.description());
         println!("   Enabled     : {}", plugin.enabled());
         println!("   Interval    : {:?}", plugin.interval());
-        println!("   Escalation  : {}", format_plan(&plan));
+        println!("   Mode        : {}", plugin.remediation_mode());
+        println!("   Remediation : {}", remediation);
         println!("   Status      : {}", status.message);
         println!();
     }

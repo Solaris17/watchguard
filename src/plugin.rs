@@ -275,7 +275,17 @@ pub trait Plugin {
 
     fn interval(&self) -> Duration;
 
-    fn escalation_steps(&self) -> Vec<EscalationStep>;
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        Vec::new()
+    }
+
+    fn remediation_mode(&self) -> &'static str {
+        "escalation"
+    }
+
+    fn remediation_summary(&self) -> Option<String> {
+        None
+    }
 
     fn failure_reason(&self) -> &'static str;
 

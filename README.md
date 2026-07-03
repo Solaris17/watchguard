@@ -10,7 +10,7 @@ It is designed to sit close to the host and recover from failures that can make 
 - DNS failures
 - Linux OOM events seen in journald
 
-Watchguard runs as a normal systemd service and can restart services, run commands, or reboot the host depending on your escalation policy.
+Watchguard runs as a normal systemd service and can restart services, run commands, or reboot the host depending on the plugin remediation policy.
 
 By default, all monitoring plugins are present in the config but disabled. Network and DNS use safe no-op escalation defaults.
 
@@ -24,8 +24,8 @@ By default, all monitoring plugins are present in the config but disabled. Netwo
 - Human-readable duration config values such as `500ms`, `5s`, `5m`, and `1h`
 - Real plugin trait architecture
 - Generic action engine
-- Strict escalation-only remediation model
-- `watchguard plugins` plugin metadata and escalation display
+- Escalation for polling checks, plus immediate event-driven OOM reboot
+- `watchguard plugins` plugin metadata and remediation display
 - `watchguard doctor` diagnostics
 - `watchguard test` live one-shot probe checks
 - `watchguard logs` journal helper
@@ -104,7 +104,7 @@ sudo systemctl restart watchguard.service
 
 ## Action engine
 
-Watchguard uses one remediation model: escalation steps.
+Watchguard has one generic action engine. Polling checks use escalation steps. OOM is event-driven and immediately requests reboot on the first matched kernel OOM journal event.
 
 Supported actions:
 
@@ -165,7 +165,7 @@ reboot_cooldown = "30m"
 
 ## Escalation
 
-Each enabled check has a `failure_actions` list or a check-specific equivalent such as `service_failure_actions`.
+Polling checks have a `failure_actions` list or a check-specific equivalent such as `service_failure_actions`. OOM does not use `failure_actions`; it is an event-driven immediate reboot policy.
 
 Example:
 
@@ -255,6 +255,34 @@ Only set reboot actions after validating your targets.
 
 ---
 
+## OOM immediate reboot policy
+
+OOM is intentionally different from SSH, network, and DNS checks. It is event-driven instead of failure-count driven.
+
+```toml
+[oom]
+enabled = true
+
+patterns = [
+  "out of memory: kill process",
+  "invoked oom-killer",
+  "oom-killer",
+  "memory cgroup out of memory"
+]
+```
+
+When Watchguard sees one of those journal patterns, it immediately requests a reboot. The request is still protected by the global safety guards:
+
+```toml
+[global]
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+```
+
+There is no `failure_actions` list for OOM because an OOM event means the kernel has already killed a process and the host may be partially degraded.
+
+---
+
 ## Plugin architecture
 
 Watchguard uses a Rust trait for health checks:
@@ -268,6 +296,8 @@ pub trait Plugin {
     fn enabled(&self) -> bool;
     fn interval(&self) -> Duration;
     fn escalation_steps(&self) -> Vec<EscalationStep>;
+    fn remediation_mode(&self) -> &'static str;
+    fn remediation_summary(&self) -> Option<String>;
 
     fn update_config(&mut self, cfg: &AppConfig);
     fn probe(&mut self, rt: &Runtime) -> Result<bool>;
@@ -317,7 +347,7 @@ Durations are human-readable:
 1h
 ```
 
-By default, every plugin is disabled:
+By default, every plugin is disabled. OOM has no `failure_actions` field; enabling it activates immediate reboot-on-OOM-event behavior:
 
 ```toml
 [oom]
@@ -412,4 +442,36 @@ Check whether port 22 is listening:
 
 ```bash
 ss -tlnp | grep ':22'
+```
+
+---
+
+## Logging
+
+Watchguard logs to journald through the `watchguard.service` unit.
+
+View logs:
+
+```bash
+watchguard logs
+watchguard logs --boot --no-follow
+journalctl -u watchguard.service -f
+```
+
+The daemon logs:
+
+- daemon startup and global timing settings
+- plugin registration and enabled state
+- plugin failures, thresholds, and recoveries
+- OOM journal watcher start/stop/restart
+- matched OOM journal lines
+- remediation decisions
+- remediation command start, success, and failure
+- reboot suppression due to boot grace or reboot cooldown
+
+Successful checks are not logged on every tick by default to avoid log spam. Increase detail with:
+
+```toml
+[global]
+log_level = "debug"
 ```

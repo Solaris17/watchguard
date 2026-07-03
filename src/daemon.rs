@@ -9,12 +9,29 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
     let initial_cfg = config::load_config(config_path)?;
     init_logging(&initial_cfg.global.log_level)?;
 
-    info!("watchguard daemon starting; config={}", config_path);
+    info!(
+        config = config_path,
+        log_level = initial_cfg.global.log_level,
+        tick = ?initial_cfg.global.tick,
+        boot_grace_period = ?initial_cfg.global.boot_grace_period,
+        reboot_cooldown = ?initial_cfg.global.reboot_cooldown,
+        "watchguard daemon starting"
+    );
 
     let rt = Runtime::new().context("creating Tokio runtime")?;
     let start_time = Instant::now();
     let mut last_reboot_attempt: Option<Instant> = None;
     let mut plugins = registry::build_plugins(&initial_cfg);
+
+    for plugin in plugins.iter_mut() {
+        plugin.update_config(&initial_cfg);
+        info!(
+            plugin = plugin.id(),
+            enabled = plugin.enabled(),
+            interval = ?plugin.interval(),
+            "plugin registered"
+        );
+    }
 
     loop {
         let cfg = match config::load_config(config_path) {
@@ -40,7 +57,7 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                     failures,
                     message,
                 } => {
-                    info!(plugin, failures, "{}", message);
+                    info!(plugin, failures, "plugin recovered: {}", message);
                 }
 
                 TickOutcome::Failure {
@@ -52,9 +69,24 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                     reason,
                 } => {
                     if let Some(error) = error {
-                        warn!(plugin, failures, limit, error, "plugin check failed");
+                        warn!(
+                            plugin,
+                            failures,
+                            limit,
+                            error,
+                            reason,
+                            action = ?action,
+                            "plugin check failed"
+                        );
                     } else {
-                        warn!(plugin, failures, limit, "plugin check failed");
+                        warn!(
+                            plugin,
+                            failures,
+                            limit,
+                            reason,
+                            action = ?action,
+                            "plugin check failed"
+                        );
                     }
 
                     if let Some(action) = action {

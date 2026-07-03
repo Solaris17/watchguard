@@ -24,6 +24,8 @@ cargo run -- test --all --config ./packaging/config.toml
 
 ## Action engine
 
+The action engine is shared by escalation-driven polling plugins and event-driven plugins such as OOM.
+
 Action types:
 
 ```text
@@ -45,7 +47,7 @@ Action and escalation configuration types live in:
 src/config.rs
 ```
 
-Escalation state and threshold logic lives in:
+Escalation state and threshold logic for polling checks lives in:
 
 ```text
 src/plugin.rs
@@ -66,7 +68,7 @@ pub struct EscalationStep {
 }
 ```
 
-Every enabled check uses an escalation list:
+Polling checks use escalation lists:
 
 ```toml
 failure_actions = [
@@ -76,7 +78,7 @@ failure_actions = [
 ]
 ```
 
-The plugin failure counter resets only when the probe succeeds.
+The plugin failure counter resets only when the probe succeeds. OOM is event-driven and does not use failure counters or `failure_actions`; it immediately requests reboot on the first matched OOM journal event, subject to boot grace and reboot cooldown.
 
 After the final escalation step has fired, Watchguard repeats the final step periodically using the final step threshold. For example, a final step at 9 failures repeats at 18, 27, and so on while the failure remains unresolved.
 
@@ -187,3 +189,18 @@ watchguard plugins
 watchguard test
 watchguard logs --boot --no-follow
 ```
+
+---
+
+## Logging checks
+
+After starting the service:
+
+```bash
+watchguard logs --boot --no-follow
+journalctl -u watchguard.service -f
+```
+
+You should see daemon startup, plugin registration, OOM watcher state, plugin failures/recoveries, and remediation actions.
+
+Successful probes are intentionally not logged every tick at `info` level.
