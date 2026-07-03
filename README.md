@@ -47,3 +47,6 @@ cargo run -- status --config ./packaging/config.toml
 cargo run -- doctor --config ./packaging/config.toml
 cargo run -- daemon --config ./packaging/config.toml
 ```
+## Build Docs
+
+[Build Watchguard](docs/README_BUILD.md)

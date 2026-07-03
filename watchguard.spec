@@ -31,7 +31,7 @@ cargo build --release
 
 %install
 install -Dpm 0755 target/release/watchguard %{buildroot}%{_bindir}/watchguard
-install -Dpm 0644 packaging/watchguard.service %{buildroot}%{_unitdir}/watchguard.service
+install -Dpm 0644 packaging/watchguard.service %{buildroot}/usr/lib/systemd/system/watchguard.service
 install -Dpm 0644 packaging/config.toml %{buildroot}%{_sysconfdir}/watchguard/config.toml
 install -Dpm 0644 packaging/watchguard.8 %{buildroot}%{_mandir}/man8/watchguard.8
 
@@ -48,7 +48,7 @@ install -Dpm 0644 packaging/watchguard.8 %{buildroot}%{_mandir}/man8/watchguard.
 %license LICENSE
 %doc README.md docs/README_BUILD.md
 %{_bindir}/watchguard
-%{_unitdir}/watchguard.service
+/usr/lib/systemd/system/watchguard.service
 %config(noreplace) %{_sysconfdir}/watchguard/config.toml
 %{_mandir}/man8/watchguard.8*
 
