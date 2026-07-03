@@ -94,6 +94,7 @@ pub enum TickOutcome {
         error: Option<String>,
         action: Option<ActionPlan>,
         reason: &'static str,
+        details: Option<String>,
     },
     Fatal {
         plugin: &'static str,
@@ -188,6 +189,7 @@ impl CheckState {
                 error,
                 action: Some(action_plan),
                 reason: failure_reason,
+                details: None,
             };
         }
 
@@ -198,6 +200,7 @@ impl CheckState {
             error,
             action: None,
             reason: failure_reason,
+            details: None,
         }
     }
 }

@@ -8,6 +8,7 @@ mod plugin;
 mod plugins;
 mod plugins_cmd;
 mod registry;
+mod state;
 mod status;
 mod testcmd;
 mod util;
@@ -30,6 +31,10 @@ fn main() -> Result<()> {
         CliCommand::Test { config, all } => testcmd::cmd_test(&config, all),
 
         CliCommand::Plugins { config } => plugins_cmd::cmd_plugins(&config),
+
+        CliCommand::State => state::cmd_state(),
+
+        CliCommand::History { lines } => state::cmd_history(lines),
 
         CliCommand::Logs {
             unit,

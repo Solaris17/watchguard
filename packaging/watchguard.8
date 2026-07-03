@@ -90,6 +90,14 @@ all configured plugins are tested even if disabled.
 List registered plugins, metadata, enabled state, and remediation policies.
 
 .TP
+.B watchguard state
+Show persistent Watchguard state from /var/lib/watchguard/state.json.
+
+.TP
+.B watchguard history [-n LINES]
+Show persistent remediation history.
+
+.TP
 .B watchguard logs [--unit UNIT] [--since TIME] [-n LINES] [-b|--boot] [--no-follow]
 Show Watchguard logs through journalctl.
 
@@ -180,6 +188,7 @@ OOM is intentionally different from SSH, network, and DNS checks. It is event-dr
 .EX
 [oom]
 enabled = true
+debounce = "5s"
 .EE
 
 When Watchguard sees a configured OOM journal pattern, it immediately requests reboot. The reboot request is still protected by:
@@ -208,6 +217,33 @@ journalctl -u watchguard.service -f
 Watchguard logs daemon startup, plugin registration, plugin failures, recoveries, OOM watcher lifecycle, matched OOM journal lines, remediation decisions, remediation command success/failure, and reboot suppression due to boot grace or cooldown.
 
 Successful checks are not logged every tick at normal info level to avoid log spam.
+
+
+.SH STATE DATABASE
+Watchguard writes persistent remediation state to:
+
+.EX
+/var/lib/watchguard/state.json
+.EE
+
+The state database records remediation events including plugin, action, status, reason, command, service, failures, thresholds, reboot requests, and OOM event counts.
+
+View state:
+
+.EX
+watchguard state
+.EE
+
+View history:
+
+.EX
+watchguard history
+watchguard history -n 50
+.EE
+
+The state file is updated before remediation commands execute. This is especially useful for reboot actions because a "started" event should survive after the host comes back up.
+
+The systemd unit uses StateDirectory=watchguard to create /var/lib/watchguard.
 
 .SH CONFIGURATION
 The default configuration file is:
@@ -290,6 +326,14 @@ Packaged systemd unit file.
 .I /usr/share/man/man8/watchguard.8
 Manual page.
 
+.TP
+.I /var/lib/watchguard/state.json
+Persistent state database.
+
+.TP
+.I /var/lib/watchguard
+Persistent state directory.
+
 .SH TROUBLESHOOTING
 .TP
 .B watchguard test --all fails disabled checks
@@ -307,4 +351,4 @@ or
 .BR ssh.service .
 
 .SH AUTHOR
-Watchguard project
+Solaris17 couchit.net

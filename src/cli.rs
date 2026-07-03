@@ -47,6 +47,16 @@ pub enum CliCommand {
         config: String,
     },
 
+    /// Show persistent Watchguard state from /var/lib/watchguard/state.json.
+    State,
+
+    /// Show persistent remediation history.
+    History {
+        /// Number of history entries to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        lines: usize,
+    },
+
     /// Follow Watchguard logs using journalctl.
     Logs {
         /// systemd unit to read logs for.

@@ -26,6 +26,8 @@ By default, all monitoring plugins are present in the config but disabled. Netwo
 - Generic action engine
 - Escalation for polling checks, plus immediate event-driven OOM reboot
 - `watchguard plugins` plugin metadata and remediation display
+- `watchguard state` persistent state summary
+- `watchguard history` persistent remediation history
 - `watchguard doctor` diagnostics
 - `watchguard test` live one-shot probe checks
 - `watchguard logs` journal helper
@@ -53,6 +55,8 @@ Check the install:
 ```bash
 watchguard doctor
 watchguard plugins
+watchguard state
+watchguard history
 watchguard status
 watchguard test
 ```
@@ -73,6 +77,8 @@ watchguard doctor
 watchguard test
 watchguard test --all
 watchguard plugins
+watchguard state
+watchguard history
 watchguard logs
 watchguard logs --since "1 hour ago"
 watchguard logs --boot --no-follow
@@ -262,6 +268,7 @@ OOM is intentionally different from SSH, network, and DNS checks. It is event-dr
 ```toml
 [oom]
 enabled = true
+debounce = "5s"
 
 patterns = [
   "out of memory: kill process",
@@ -280,6 +287,49 @@ reboot_cooldown = "30m"
 ```
 
 There is no `failure_actions` list for OOM because an OOM event means the kernel has already killed a process and the host may be partially degraded.
+
+---
+
+## Persistent state database
+
+Watchguard keeps a small JSON state database at:
+
+```text
+/var/lib/watchguard/state.json
+```
+
+It records remediation events and summary counters, including:
+
+- plugin name
+- action
+- status
+- reason
+- command/service
+- failure count and threshold
+- reboot requests
+- OOM event count
+
+View the state summary:
+
+```bash
+watchguard state
+```
+
+View remediation history:
+
+```bash
+watchguard history
+watchguard history -n 50
+```
+
+The state file is written before reboot actions are executed, so a Watchguard-initiated reboot should still leave a record after the machine comes back up. The systemd unit also uses:
+
+```ini
+StateDirectory=watchguard
+```
+
+so systemd creates `/var/lib/watchguard` automatically when the service starts.
+
 
 ---
 
@@ -377,6 +427,8 @@ Run from the source tree:
 ```bash
 cargo run -- config validate --config ./packaging/config.toml
 cargo run -- plugins --config ./packaging/config.toml
+cargo run -- state
+cargo run -- history
 cargo run -- status --config ./packaging/config.toml
 cargo run -- doctor --config ./packaging/config.toml
 cargo run -- test --config ./packaging/config.toml
@@ -403,6 +455,8 @@ Verify:
 ```bash
 watchguard doctor
 watchguard plugins
+watchguard state
+watchguard history
 watchguard status
 watchguard test
 watchguard logs --boot --no-follow
@@ -464,9 +518,10 @@ The daemon logs:
 - plugin registration and enabled state
 - plugin failures, thresholds, and recoveries
 - OOM journal watcher start/stop/restart
-- matched OOM journal lines
+- matched OOM journal lines with duplicate OOM messages debounced
 - remediation decisions
 - remediation command start, success, and failure
+- persistent state writes to `/var/lib/watchguard/state.json`
 - reboot suppression due to boot grace or reboot cooldown
 
 Successful checks are not logged on every tick by default to avoid log spam. Increase detail with:

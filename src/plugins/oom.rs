@@ -15,14 +15,26 @@ use crate::{
     util,
 };
 
+#[derive(Debug, Clone)]
+pub struct OomEvent {
+    pub line: String,
+}
+
 pub fn journalctl_exists() -> bool {
     util::command_exists("/usr/bin/journalctl")
 }
 
-pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<Child> {
+pub fn spawn_watcher(
+    patterns: Vec<String>,
+    debounce: Duration,
+    oom_tx: mpsc::Sender<OomEvent>,
+) -> Result<Child> {
     info!(
         pattern_count = patterns.len(),
-        "starting OOM journal watcher: journalctl -kf -n 0"
+        debounce = ?debounce,
+    "starting OOM journal watcher: command='journalctl -kf -n 0' pattern_count={} debounce={:?}",
+        patterns.len(),
+        debounce
     );
 
     let mut child = Command::new("/usr/bin/journalctl")
@@ -54,13 +66,39 @@ pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<
 
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
+        let mut last_sent: Option<Instant> = None;
 
         for line in reader.lines().map_while(Result::ok) {
             let lower = line.to_lowercase();
 
             if patterns.iter().any(|p| lower.contains(p)) {
-                warn!(target = "oom", journal_line = %line, "OOM pattern matched");
-                let _ = oom_tx.send(());
+                let now = Instant::now();
+
+                if last_sent
+                    .map(|last| now.duration_since(last) < debounce)
+                    .unwrap_or(false)
+                {
+                    debug!(
+                        target = "oom",
+                        journal_line = %line,
+                        debounce = ?debounce,
+                    "duplicate OOM pattern suppressed by debounce: debounce={:?} line={}",
+                        debounce,
+                        line
+                    );
+                    continue;
+                }
+
+                last_sent = Some(now);
+
+                warn!(
+                    target = "oom",
+                    journal_line = %line,
+                "OOM kernel pattern matched: line={}",
+                    line
+                );
+
+                let _ = oom_tx.send(OomEvent { line });
             }
         }
 
@@ -75,14 +113,14 @@ pub struct OomPlugin {
     interval: Duration,
     state: CheckState,
     child: Option<Child>,
-    signature: Option<Vec<String>>,
-    tx: mpsc::Sender<()>,
-    rx: mpsc::Receiver<()>,
+    signature: Option<(Vec<String>, Duration)>,
+    tx: mpsc::Sender<OomEvent>,
+    rx: mpsc::Receiver<OomEvent>,
 }
 
 impl OomPlugin {
     pub fn new(cfg: &AppConfig) -> Self {
-        let (tx, rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<OomEvent>();
 
         Self {
             cfg: cfg.oom.clone(),
@@ -105,8 +143,12 @@ impl OomPlugin {
         self.signature = None;
     }
 
+    fn desired_signature(&self) -> (Vec<String>, Duration) {
+        (self.cfg.patterns.clone(), self.cfg.debounce)
+    }
+
     fn ensure_watcher(&mut self) -> Result<()> {
-        let desired_signature = self.cfg.patterns.clone();
+        let desired_signature = self.desired_signature();
 
         let needs_start = self.child.is_none()
             || self
@@ -120,14 +162,24 @@ impl OomPlugin {
         }
 
         if self.child.is_some() {
-            warn!("OOM pattern config changed; restarting journalctl watcher");
+            warn!("OOM pattern or debounce config changed; restarting journalctl watcher");
             self.stop_watcher();
         }
 
-        self.child = Some(spawn_watcher(self.cfg.patterns.clone(), self.tx.clone())?);
+        self.child = Some(spawn_watcher(
+            self.cfg.patterns.clone(),
+            self.cfg.debounce,
+            self.tx.clone(),
+        )?);
         self.signature = Some(desired_signature);
 
-        info!("OOM journal watcher active");
+        info!(
+            pattern_count = self.cfg.patterns.len(),
+            debounce = ?self.cfg.debounce,
+        "OOM journal watcher active: pattern_count={} debounce={:?}",
+            self.cfg.patterns.len(),
+            self.cfg.debounce
+        );
 
         Ok(())
     }
@@ -149,7 +201,7 @@ impl Plugin for OomPlugin {
     }
 
     fn description(&self) -> &'static str {
-        "Watches journald for OOM messages and immediately requests reboot"
+        "Watches kernel journald messages for OOM events and immediately requests reboot"
     }
 
     fn enabled(&self) -> bool {
@@ -160,8 +212,19 @@ impl Plugin for OomPlugin {
         self.interval
     }
 
+    fn remediation_mode(&self) -> &'static str {
+        "event-immediate"
+    }
+
+    fn remediation_summary(&self) -> Option<String> {
+        Some(format!(
+            "reboot immediately on first matched kernel OOM journal event; debounce {:?}",
+            self.cfg.debounce
+        ))
+    }
+
     fn failure_reason(&self) -> &'static str {
-        "OOM detected in journal"
+        "OOM detected in kernel journal"
     }
 
     fn success_message(&self) -> &'static str {
@@ -169,7 +232,6 @@ impl Plugin for OomPlugin {
     }
 
     fn update_config(&mut self, cfg: &AppConfig) {
-        let old_patterns = self.cfg.patterns.clone();
         let was_enabled = self.cfg.enabled;
 
         self.cfg = cfg.oom.clone();
@@ -177,13 +239,11 @@ impl Plugin for OomPlugin {
 
         if was_enabled != self.cfg.enabled {
             info!(
+                plugin = self.id(),
                 enabled = self.cfg.enabled,
-                "OOM plugin enabled state changed"
+                "OOM plugin enabled state changed: enabled={}",
+                self.cfg.enabled
             );
-        }
-
-        if self.signature.as_ref() != Some(&old_patterns) {
-            self.signature = None;
         }
     }
 
@@ -207,8 +267,9 @@ impl Plugin for OomPlugin {
         PluginStatus::healthy(
             self.id(),
             format!(
-                "event-immediate reboot configured, {} pattern(s)",
-                self.cfg.patterns.len()
+                "event-immediate reboot configured, {} pattern(s), debounce {:?}",
+                self.cfg.patterns.len(),
+                self.cfg.debounce
             ),
         )
     }
@@ -218,8 +279,9 @@ impl Plugin for OomPlugin {
             Ok(true) => PluginStatus::healthy(
                 self.id(),
                 format!(
-                    "journalctl available, {} pattern(s)",
-                    self.cfg.patterns.len()
+                    "journalctl available, {} pattern(s), debounce {:?}",
+                    self.cfg.patterns.len(),
+                    self.cfg.debounce
                 ),
             ),
             Ok(false) => PluginStatus::failed(
@@ -266,18 +328,29 @@ impl Plugin for OomPlugin {
             }
         }
 
-        let mut detected = false;
         let mut event_count = 0_u32;
+        let mut first_line: Option<String> = None;
 
-        while self.rx.try_recv().is_ok() {
-            detected = true;
+        while let Ok(event) = self.rx.try_recv() {
             event_count += 1;
+
+            if first_line.is_none() {
+                first_line = Some(event.line);
+            }
         }
 
-        if detected {
+        if event_count > 0 {
+            let details = first_line
+                .as_deref()
+                .map(|line| format!("matched kernel journal line: {}", line));
+
             warn!(
+                plugin = self.id(),
                 event_count,
-                "OOM event detected; immediate reboot remediation requested"
+                details = ?details,
+            "OOM event detected; immediate reboot remediation requested: event_count={} details={:?}",
+                event_count,
+                details
             );
 
             TickOutcome::Failure {
@@ -287,6 +360,7 @@ impl Plugin for OomPlugin {
                 error: None,
                 action: Some(ActionPlan::from_action(Action::Reboot)),
                 reason: self.failure_reason(),
+                details,
             }
         } else {
             TickOutcome::Idle

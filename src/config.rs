@@ -42,6 +42,9 @@ reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
 [oom]
 enabled = false
 
+# Suppress duplicate OOM kernel lines from the same incident.
+debounce = "5s"
+
 # OOM does not use failure_actions. A matched OOM journal event immediately
 # requests a reboot, subject to boot grace and reboot cooldown.
 patterns = [
@@ -124,6 +127,9 @@ failure_actions = [
 const DEFAULT_OOM_SECTION: &str = r#"
 [oom]
 enabled = false
+
+# Suppress duplicate OOM kernel lines from the same incident.
+debounce = "5s"
 
 # OOM does not use failure_actions. A matched OOM journal event immediately
 # requests a reboot, subject to boot grace and reboot cooldown.
@@ -268,6 +274,10 @@ impl Default for CommandsConfig {
 #[serde(default)]
 pub struct OomConfig {
     pub enabled: bool,
+
+    #[serde(with = "humantime_serde")]
+    pub debounce: Duration,
+
     pub patterns: Vec<String>,
 }
 
@@ -275,6 +285,7 @@ impl Default for OomConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            debounce: Duration::from_secs(5),
             patterns: vec![
                 "out of memory: kill process".to_string(),
                 "invoked oom-killer".to_string(),
@@ -503,6 +514,10 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
 
     if cfg.commands.reboot.is_empty() {
         return Err(anyhow!("commands.reboot must not be empty"));
+    }
+
+    if cfg.oom.debounce > Duration::from_secs(60 * 60) {
+        return Err(anyhow!("oom.debounce is unreasonably large"));
     }
 
     if cfg.oom.enabled && cfg.oom.patterns.is_empty() {

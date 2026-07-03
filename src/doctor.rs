@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::{fs, path::Path};
 use tokio::runtime::Runtime;
 
-use crate::{config, plugin::format_status_line, registry, util};
+use crate::{config, plugin::format_status_line, registry, state, util};
 
 pub fn cmd_doctor(config_path: &str) -> Result<()> {
     println!("🛡️  Watchguard Doctor");
@@ -69,6 +69,18 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
     } else {
         println!("❌ Reboot command missing");
         failures += 1;
+    }
+
+    match state::ensure_state_dir() {
+        Ok(()) => println!("✅ State directory ready: {}", state::STATE_DIR),
+        Err(e) => {
+            println!(
+                "⚠️  State directory not writable: {} ({:#})",
+                state::STATE_DIR,
+                e
+            );
+            warnings += 1;
+        }
     }
 
     let rt = Runtime::new().context("creating Tokio runtime")?;

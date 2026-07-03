@@ -3,7 +3,7 @@ use std::{thread, time::Instant};
 use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
 
-use crate::{actions, config, plugin::TickOutcome, registry};
+use crate::{actions, config, plugin::TickOutcome, registry, state};
 
 pub fn daemon_loop(config_path: &str) -> Result<()> {
     let initial_cfg = config::load_config(config_path)?;
@@ -15,8 +15,26 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
         tick = ?initial_cfg.global.tick,
         boot_grace_period = ?initial_cfg.global.boot_grace_period,
         reboot_cooldown = ?initial_cfg.global.reboot_cooldown,
-        "watchguard daemon starting"
+        "watchguard daemon starting: config={} log_level={} tick={:?} boot_grace={:?} reboot_cooldown={:?}",
+        config_path,
+        initial_cfg.global.log_level,
+        initial_cfg.global.tick,
+        initial_cfg.global.boot_grace_period,
+        initial_cfg.global.reboot_cooldown
     );
+
+    match state::ensure_state_dir() {
+        Ok(()) => info!(
+            path = state::STATE_DIR,
+            "state directory ready: path={}",
+            state::STATE_DIR
+        ),
+        Err(e) => {
+            warn!(path = state::STATE_DIR, error = ?e, "state directory not ready; remediation history may not persist: path={} error={:?}",
+            state::STATE_DIR,
+            e)
+        }
+    }
 
     let rt = Runtime::new().context("creating Tokio runtime")?;
     let start_time = Instant::now();
@@ -29,7 +47,11 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
             plugin = plugin.id(),
             enabled = plugin.enabled(),
             interval = ?plugin.interval(),
-            "plugin registered"
+            "plugin registered: plugin={} enabled={} interval={:?} mode={}",
+            plugin.id(),
+            plugin.enabled(),
+            plugin.interval(),
+            plugin.remediation_mode()
         );
     }
 
@@ -57,7 +79,14 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                     failures,
                     message,
                 } => {
-                    info!(plugin, failures, "plugin recovered: {}", message);
+                    info!(
+                        plugin,
+                        failures,
+                        "plugin recovered: plugin={} failures={} message={}",
+                        plugin,
+                        failures,
+                        message
+                    );
                 }
 
                 TickOutcome::Failure {
@@ -67,6 +96,7 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                     error,
                     action,
                     reason,
+                    details,
                 } => {
                     if let Some(error) = error {
                         warn!(
@@ -75,8 +105,15 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                             limit,
                             error,
                             reason,
+                            details = ?details,
                             action = ?action,
-                            "plugin check failed"
+                            "plugin check failed: plugin={} failures={}/{} reason={} action={:?} details={:?}",
+                            plugin,
+                            failures,
+                            limit,
+                            reason,
+                            action,
+                            details
                         );
                     } else {
                         warn!(
@@ -84,20 +121,39 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                             failures,
                             limit,
                             reason,
+                            details = ?details,
                             action = ?action,
-                            "plugin check failed"
+                            "plugin check failed: plugin={} failures={}/{} reason={} action={:?} details={:?}",
+                            plugin,
+                            failures,
+                            limit,
+                            reason,
+                            action,
+                            details
                         );
                     }
 
                     if let Some(action) = action {
-                        actions::act(action, &cfg, start_time, &mut last_reboot_attempt, reason);
+                        actions::act(
+                            plugin,
+                            action,
+                            &cfg,
+                            start_time,
+                            &mut last_reboot_attempt,
+                            reason,
+                            details.as_deref(),
+                            failures,
+                            limit,
+                        );
                     }
                 }
 
                 TickOutcome::Fatal { plugin, error } => {
                     error!(
                         plugin,
-                        error, "fatal plugin error; exiting so systemd restarts watchguard"
+                        error, "fatal plugin error; exiting so systemd restarts watchguard: plugin={} error={}",
+                        plugin,
+                        error
                     );
                     std::process::exit(2);
                 }

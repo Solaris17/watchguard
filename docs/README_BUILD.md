@@ -14,6 +14,8 @@ Run commands from source:
 cargo run -- version
 cargo run -- config validate --config ./packaging/config.toml
 cargo run -- plugins --config ./packaging/config.toml
+cargo run -- state
+cargo run -- history
 cargo run -- status --config ./packaging/config.toml
 cargo run -- doctor --config ./packaging/config.toml
 cargo run -- test --config ./packaging/config.toml
@@ -123,6 +125,8 @@ Validate:
 ```bash
 watchguard version
 watchguard plugins
+watchguard state
+watchguard history
 watchguard doctor
 watchguard status
 watchguard test
@@ -167,6 +171,8 @@ exit
 systemctl status watchguard.service
 watchguard version
 watchguard plugins
+watchguard state
+watchguard history
 watchguard doctor
 watchguard status
 watchguard test
@@ -199,8 +205,43 @@ After starting the service:
 ```bash
 watchguard logs --boot --no-follow
 journalctl -u watchguard.service -f
+watchguard state
+watchguard history
 ```
 
 You should see daemon startup, plugin registration, OOM watcher state, plugin failures/recoveries, and remediation actions.
 
 Successful probes are intentionally not logged every tick at `info` level.
+
+---
+
+## State database
+
+Watchguard writes persistent remediation history to:
+
+```text
+/var/lib/watchguard/state.json
+```
+
+Commands:
+
+```bash
+watchguard state
+watchguard history
+watchguard history -n 50
+```
+
+The state database is updated before remediation commands execute. For reboot actions this means the "started" event should be present after the host comes back up, even if journald rotates.
+
+The systemd unit uses:
+
+```ini
+StateDirectory=watchguard
+StateDirectoryMode=0755
+```
+
+RPM packaging also owns the directory:
+
+```text
+/var/lib/watchguard
+```
