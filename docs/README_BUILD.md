@@ -245,3 +245,29 @@ RPM packaging also owns the directory:
 ```text
 /var/lib/watchguard
 ```
+
+---
+
+## SSH service auto-detection
+
+The packaged default config uses:
+
+```toml
+[ssh]
+service = "auto"
+```
+
+and SSH remediation steps use:
+
+```toml
+service = "auto"
+```
+
+At runtime, Watchguard resolves `auto` to `sshd.service` first, then `ssh.service`. This allows one default config to work on RHEL/Rocky/Alma and Ubuntu/Debian.
+
+Use these commands to inspect the resolved service:
+
+```bash
+watchguard plugins --config ./packaging/config.toml
+watchguard test --all --config ./packaging/config.toml
+```

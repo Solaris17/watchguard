@@ -1,3 +1,4 @@
+
 use anyhow::{anyhow, Context, Result};
 use std::{
     process::{Command, Stdio},
@@ -89,7 +90,7 @@ pub fn act(
         }
 
         Action::RestartService => {
-            let Some(service) = plan.service.as_deref().filter(|s| !s.trim().is_empty()) else {
+            let Some(raw_service) = plan.service.as_deref().filter(|s| !s.trim().is_empty()) else {
                 error!(
                     plugin,
                     action,
@@ -115,6 +116,14 @@ pub fn act(
                 );
 
                 return;
+            };
+
+            let resolved_service;
+            let service = if raw_service.trim() == "auto" {
+                resolved_service = crate::util::resolve_ssh_service(raw_service);
+                resolved_service.as_str()
+            } else {
+                raw_service
             };
 
             let argv = vec![

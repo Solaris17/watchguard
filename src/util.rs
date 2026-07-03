@@ -63,3 +63,48 @@ pub fn multi_target_probe(targets: &[String], require_all: bool, timeout: Durati
         targets.iter().any(|t| tcp_probe(t, timeout))
     }
 }
+
+pub fn systemd_unit_load_state(unit: &str) -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/systemctl")
+        .args(["show", "-p", "LoadState", "--value", unit])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if stdout.is_empty() {
+        None
+    } else {
+        Some(stdout)
+    }
+}
+
+pub fn systemd_unit_exists(unit: &str) -> bool {
+    matches!(
+        systemd_unit_load_state(unit).as_deref(),
+        Some("loaded") | Some("masked") | Some("static") | Some("generated") | Some("transient")
+    )
+}
+
+pub fn resolve_ssh_service(configured: &str) -> String {
+    let configured = configured.trim();
+
+    if !configured.is_empty() && configured != "auto" {
+        return configured.to_string();
+    }
+
+    if systemd_unit_exists("sshd.service") {
+        return "sshd.service".to_string();
+    }
+
+    if systemd_unit_exists("ssh.service") {
+        return "ssh.service".to_string();
+    }
+
+    // Fall back to the RHEL-style name so the eventual systemd error is explicit.
+    "sshd.service".to_string()
+}
+
+pub fn is_auto(value: &str) -> bool {
+    value.trim() == "auto"
+}

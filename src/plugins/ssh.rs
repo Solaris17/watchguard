@@ -1,16 +1,47 @@
+
 use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use zbus::Connection;
 
 use crate::{
-    config::{AppConfig, EscalationStep, SshConfig},
+    config::{Action, AppConfig, EscalationStep, SshConfig},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
     util,
 };
 
 pub fn targets_ok(cfg: &SshConfig) -> bool {
     util::multi_target_probe(&cfg.targets, cfg.require_all, cfg.ssh_timeout)
+}
+
+fn resolved_service_name(cfg: &SshConfig) -> String {
+    util::resolve_ssh_service(&cfg.service)
+}
+
+fn configured_resolved_suffix(configured: &str, resolved: &str) -> String {
+    if util::is_auto(configured) {
+        format!("configured=auto resolved={}", resolved)
+    } else {
+        format!("configured={}", configured)
+    }
+}
+
+fn resolve_restart_service_steps(cfg: &SshConfig, steps: &[EscalationStep]) -> Vec<EscalationStep> {
+    let resolved = resolved_service_name(cfg);
+
+    steps
+        .iter()
+        .cloned()
+        .map(|mut step| {
+            if step.action == Action::RestartService
+                && step.service.as_deref().map(util::is_auto).unwrap_or(false)
+            {
+                step.service = Some(resolved.clone());
+            }
+
+            step
+        })
+        .collect()
 }
 
 // systemd D-Bus: ActiveState == "active"
@@ -72,7 +103,7 @@ impl Plugin for SshServicePlugin {
     }
 
     fn description(&self) -> &'static str {
-        "Monitors the systemd SSH service active state"
+        "Monitors the resolved systemd SSH service active state"
     }
 
     fn enabled(&self) -> bool {
@@ -84,7 +115,7 @@ impl Plugin for SshServicePlugin {
     }
 
     fn escalation_steps(&self) -> Vec<EscalationStep> {
-        self.cfg.service_failure_actions.clone()
+        resolve_restart_service_steps(&self.cfg, &self.cfg.service_failure_actions)
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -100,7 +131,8 @@ impl Plugin for SshServicePlugin {
     }
 
     fn probe(&mut self, rt: &Runtime) -> Result<bool> {
-        rt.block_on(systemd_unit_is_active(&self.cfg.service))
+        let service = resolved_service_name(&self.cfg);
+        rt.block_on(systemd_unit_is_active(&service))
     }
 
     fn status(&mut self, rt: &Runtime) -> PluginStatus {
@@ -108,22 +140,36 @@ impl Plugin for SshServicePlugin {
             return PluginStatus::disabled(self.id(), "disabled");
         }
 
+        let service = resolved_service_name(&self.cfg);
+        let suffix = configured_resolved_suffix(&self.cfg.service, &service);
+
         match self.probe(rt) {
-            Ok(true) => PluginStatus::healthy(self.id(), format!("{} is active", self.cfg.service)),
-            Ok(false) => {
-                PluginStatus::warning(self.id(), format!("{} is not active", self.cfg.service))
-            }
-            Err(e) => PluginStatus::warning(self.id(), format!("status error: {:#}", e)),
+            Ok(true) => PluginStatus::healthy(
+                self.id(),
+                format!("{} is active ({})", service, suffix),
+            ),
+            Ok(false) => PluginStatus::warning(
+                self.id(),
+                format!("{} is not active ({})", service, suffix),
+            ),
+            Err(e) => PluginStatus::warning(
+                self.id(),
+                format!("status error for {} ({}): {:#}", service, suffix, e),
+            ),
         }
     }
 
     fn test(&mut self, rt: &Runtime) -> PluginStatus {
+        let service = resolved_service_name(&self.cfg);
+        let suffix = configured_resolved_suffix(&self.cfg.service, &service);
+
         match self.probe(rt) {
-            Ok(true) => PluginStatus::healthy(self.id(), format!("{} active", self.cfg.service)),
-            Ok(false) => {
-                PluginStatus::failed(self.id(), format!("{} not active", self.cfg.service))
-            }
-            Err(e) => PluginStatus::failed(self.id(), format!("error: {:#}", e)),
+            Ok(true) => PluginStatus::healthy(self.id(), format!("{} active ({})", service, suffix)),
+            Ok(false) => PluginStatus::failed(self.id(), format!("{} not active ({})", service, suffix)),
+            Err(e) => PluginStatus::failed(
+                self.id(),
+                format!("error for {} ({}): {:#}", service, suffix, e),
+            ),
         }
     }
 
@@ -186,7 +232,7 @@ impl Plugin for SshTargetsPlugin {
     }
 
     fn escalation_steps(&self) -> Vec<EscalationStep> {
-        self.cfg.ssh_failure_actions.clone()
+        resolve_restart_service_steps(&self.cfg, &self.cfg.ssh_failure_actions)
     }
 
     fn failure_reason(&self) -> &'static str {

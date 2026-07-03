@@ -1,5 +1,5 @@
 Name:           watchguard
-Version:        1.0.1
+Version:        1.0.2
 Release:        1%{?dist}
 Summary:        Plugin-based host health monitor daemon
 License:        MIT
@@ -56,6 +56,5 @@ install -dpm 0755 %{buildroot}/var/lib/watchguard
 %dir /var/lib/watchguard
 
 %changelog
-* Fri Jul 03 2026 Watchguard Project <root@localhost> - 1.0.1-1
-- Update to version 1.0.1
+* Fri Jul 03 2026 Watchguard Project <root@localhost> - 1.0.2-1
 

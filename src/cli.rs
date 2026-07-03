@@ -41,7 +41,7 @@ pub enum CliCommand {
         all: bool,
     },
 
-    /// List registered plugins and metadata.
+    /// List registered plugins, resolved service names, and remediation policy.
     Plugins {
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,

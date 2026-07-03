@@ -245,6 +245,34 @@ The state file is updated before remediation commands execute. This is especiall
 
 The systemd unit uses StateDirectory=watchguard to create /var/lib/watchguard.
 
+
+.SH SSH SERVICE AUTO-DETECTION
+The default SSH service can be configured as:
+
+.EX
+service = "auto"
+.EE
+
+For SSH remediation steps, the service can also be:
+
+.EX
+{ after_failures = 3, action = "restart_service", service = "auto" }
+.EE
+
+At runtime,
+.B auto
+resolves to
+.B sshd.service
+first, then
+.BR ssh.service .
+This allows one default configuration to work on RHEL, Rocky, Alma, Ubuntu, and Debian systems.
+
+Administrators may still hard-code
+.B sshd.service
+or
+.B ssh.service
+if desired.
+
 .SH CONFIGURATION
 The default configuration file is:
 
@@ -351,4 +379,4 @@ or
 .BR ssh.service .
 
 .SH AUTHOR
-Solaris17 couchit.net
+Watchguard project

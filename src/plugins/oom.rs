@@ -1,3 +1,4 @@
+
 use anyhow::{anyhow, Context, Result};
 use std::{
     io::{BufRead, BufReader},
@@ -32,7 +33,7 @@ pub fn spawn_watcher(
     info!(
         pattern_count = patterns.len(),
         debounce = ?debounce,
-    "starting OOM journal watcher: command='journalctl -kf -n 0' pattern_count={} debounce={:?}",
+"starting OOM journal watcher: command='journalctl -kf -n 0' pattern_count={} debounce={:?}",
         patterns.len(),
         debounce
     );
@@ -82,7 +83,7 @@ pub fn spawn_watcher(
                         target = "oom",
                         journal_line = %line,
                         debounce = ?debounce,
-                    "duplicate OOM pattern suppressed by debounce: debounce={:?} line={}",
+"duplicate OOM pattern suppressed by debounce: debounce={:?} line={}",
                         debounce,
                         line
                     );
@@ -94,7 +95,7 @@ pub fn spawn_watcher(
                 warn!(
                     target = "oom",
                     journal_line = %line,
-                "OOM kernel pattern matched: line={}",
+"OOM kernel pattern matched: line={}",
                     line
                 );
 
@@ -176,7 +177,7 @@ impl OomPlugin {
         info!(
             pattern_count = self.cfg.patterns.len(),
             debounce = ?self.cfg.debounce,
-        "OOM journal watcher active: pattern_count={} debounce={:?}",
+"OOM journal watcher active: pattern_count={} debounce={:?}",
             self.cfg.patterns.len(),
             self.cfg.debounce
         );
@@ -348,7 +349,7 @@ impl Plugin for OomPlugin {
                 plugin = self.id(),
                 event_count,
                 details = ?details,
-            "OOM event detected; immediate reboot remediation requested: event_count={} details={:?}",
+"OOM event detected; immediate reboot remediation requested: event_count={} details={:?}",
                 event_count,
                 details
             );

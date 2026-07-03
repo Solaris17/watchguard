@@ -58,12 +58,14 @@ patterns = [
 enabled = false
 
 # Service state check via systemd D-Bus.
+# Use "auto" to support both RHEL/Rocky/Alma (sshd.service) and Ubuntu/Debian (ssh.service).
+# Resolution order: sshd.service, then ssh.service.
 service_check_enabled = true
-service = "sshd.service"
+service = "auto"
 service_check_interval = "2s"
 service_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
@@ -73,8 +75,8 @@ target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
 ssh_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
@@ -146,11 +148,11 @@ const DEFAULT_SSH_SECTION: &str = r#"
 enabled = false
 
 service_check_enabled = true
-service = "sshd.service"
+service = "auto"
 service_check_interval = "2s"
 service_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
@@ -158,8 +160,8 @@ target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
 ssh_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
@@ -327,11 +329,11 @@ impl Default for SshConfig {
         Self {
             enabled: false,
             service_check_enabled: true,
-            service: "sshd.service".to_string(),
+            service: "auto".to_string(),
             service_check_interval: Duration::from_secs(2),
             service_failure_actions: vec![
-                EscalationStep::restart_service(3, "sshd.service"),
-                EscalationStep::restart_service(6, "sshd.service"),
+                EscalationStep::restart_service(3, "auto"),
+                EscalationStep::restart_service(6, "auto"),
                 EscalationStep::new(9, Action::Reboot),
             ],
             target_check_enabled: true,
@@ -340,8 +342,8 @@ impl Default for SshConfig {
             require_all: false,
             targets: vec!["127.0.0.1:22".to_string()],
             ssh_failure_actions: vec![
-                EscalationStep::restart_service(3, "sshd.service"),
-                EscalationStep::restart_service(6, "sshd.service"),
+                EscalationStep::restart_service(3, "auto"),
+                EscalationStep::restart_service(6, "auto"),
                 EscalationStep::new(9, Action::Reboot),
             ],
         }

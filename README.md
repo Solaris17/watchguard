@@ -415,6 +415,46 @@ enabled = false
 
 ---
 
+
+---
+
+## SSH service auto-detection
+
+The default SSH service is portable across RHEL-like and Debian/Ubuntu systems:
+
+```toml
+[ssh]
+service = "auto"
+
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
+  { after_failures = 9, action = "reboot" }
+]
+```
+
+`auto` resolves at runtime in this order:
+
+```text
+sshd.service
+ssh.service
+```
+
+That lets the same config work on RHEL/Rocky/Alma, where SSH is usually `sshd.service`, and Ubuntu/Debian, where SSH is usually `ssh.service`.
+
+You can still hard-code a service if needed:
+
+```toml
+service = "ssh.service"
+```
+
+or:
+
+```toml
+service = "sshd.service"
+```
+
+
 ## Build from source
 
 ```bash

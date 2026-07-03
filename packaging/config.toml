@@ -46,11 +46,11 @@ patterns = [
 enabled = false
 
 service_check_enabled = true
-service = "sshd.service"
+service = "auto"
 service_check_interval = "2s"
 service_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
@@ -58,8 +58,8 @@ target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
 ssh_failure_actions = [
-  { after_failures = 3, action = "restart_service", service = "sshd.service" },
-  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 3, action = "restart_service", service = "auto" },
+  { after_failures = 6, action = "restart_service", service = "auto" },
   { after_failures = 9, action = "reboot" }
 ]
 
