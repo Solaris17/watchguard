@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 use tokio::runtime::Runtime;
 
-use crate::{config, plugins, util};
+use crate::{config, plugin::format_status_line, registry, util};
 
 pub fn cmd_doctor(config_path: &str) -> Result<()> {
     println!("🛡️  Watchguard Doctor");
@@ -55,6 +55,15 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
         warnings += 1;
     }
 
+    if Path::new("/usr/lib/systemd/system/watchguard.service").exists()
+        || Path::new("/etc/systemd/system/watchguard.service").exists()
+    {
+        println!("✅ systemd service file found");
+    } else {
+        println!("⚠️  systemd service file not found in common paths");
+        warnings += 1;
+    }
+
     if !cfg.commands.reboot.is_empty() {
         println!("✅ Reboot command configured: {:?}", cfg.commands.reboot);
     } else {
@@ -73,85 +82,31 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
     }
 
     let rt = Runtime::new().context("creating Tokio runtime")?;
+    let mut plugins = registry::build_plugins(&cfg);
 
-    if cfg.ssh.enabled && cfg.ssh.service_check_enabled {
-        match rt.block_on(plugins::ssh::systemd_unit_is_active(&cfg.ssh.service)) {
-            Ok(true) => println!("✅ SSH service active: {}", cfg.ssh.service),
-            Ok(false) => {
-                println!("⚠️  SSH service is not active: {}", cfg.ssh.service);
+    for plugin in plugins.iter_mut() {
+        for status in plugin.doctor(&rt) {
+            if status.health.is_failure() {
+                failures += 1;
+            }
+
+            if status.health.is_warning() {
                 warnings += 1;
             }
-            Err(e) => {
-                println!("⚠️  SSH service check error for {}: {}", cfg.ssh.service, e);
-                warnings += 1;
-            }
-        }
-    } else {
-        println!("ℹ️  SSH service check disabled");
-    }
 
-    if cfg.ssh.enabled && cfg.ssh.target_check_enabled {
-        if plugins::ssh::targets_ok(&cfg.ssh) {
-            println!("✅ SSH target probe succeeded");
-        } else {
-            println!("⚠️  SSH target probe failed: {:?}", cfg.ssh.targets);
-            warnings += 1;
+            println!("{}", format_status_line(&status));
         }
-    } else {
-        println!("ℹ️  SSH target check disabled");
-    }
-
-    if cfg.network.enabled {
-        if plugins::network::check(&cfg.network) {
-            println!("✅ Network target probe succeeded");
-        } else {
-            println!("⚠️  Network target probe failed: {:?}", cfg.network.targets);
-            warnings += 1;
-        }
-    } else {
-        println!("ℹ️  Network plugin disabled");
-    }
-
-    if cfg.dns.enabled {
-        if plugins::dns::check(&cfg.dns) {
-            println!(
-                "✅ DNS probe succeeded: {} via {}",
-                cfg.dns.name, cfg.dns.server
-            );
-        } else {
-            println!(
-                "⚠️  DNS probe failed: {} via {}",
-                cfg.dns.name, cfg.dns.server
-            );
-            warnings += 1;
-        }
-    } else {
-        println!("ℹ️  DNS plugin disabled");
-    }
-
-    if cfg.oom.enabled {
-        if plugins::oom::journalctl_exists() {
-            println!("✅ OOM watcher prerequisites look good");
-        } else {
-            println!("❌ OOM plugin enabled but journalctl is missing");
-            failures += 1;
-        }
-    } else {
-        println!("ℹ️  OOM plugin disabled");
     }
 
     println!();
-
     println!(
         "ℹ️  Boot grace configured: {:?}",
         cfg.global.boot_grace_period
     );
-
     println!(
         "ℹ️  Reboot cooldown configured: {:?}",
         cfg.global.reboot_cooldown
     );
-
     println!();
 
     if failures > 0 {
@@ -159,18 +114,11 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
             "Overall Health: ❌ FAILED ({} failure(s), {} warning(s))",
             failures, warnings
         );
+        anyhow::bail!("doctor found {} failure(s)", failures);
     } else if warnings > 0 {
         println!("Overall Health: ⚠️  WARNING ({} warning(s))", warnings);
     } else {
         println!("Overall Health: ✅ OK");
-    }
-
-    // Doctor is primarily diagnostic. Warnings do not fail the command.
-    // Hard failures do return non-zero.
-    if failures > 0 {
-        let status = Command::new("false").status();
-        let _ = status;
-        anyhow::bail!("doctor found {} failure(s)", failures);
     }
 
     Ok(())

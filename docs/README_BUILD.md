@@ -1,70 +1,12 @@
 
 # Watchguard Build Instructions
 
-This document covers:
-
-1. Development builds
-2. Manual install
-3. RHEL / Rocky / Alma 9 RPM build
-4. Docker-based RPM build from Manjaro, Arch, or Ubuntu
-5. Post-install validation
-
----
-
-## Project layout
-
-Expected source layout:
-
-```text
-watchguard/
-  Cargo.toml
-  Cargo.lock
-  build.rs
-  README.md
-  LICENSE
-  watchguard.spec
-  docs/
-    README_BUILD.md
-  packaging/
-    config.toml
-    watchguard.service
-    watchguard.8
-  src/
-    main.rs
-    cli.rs
-    config.rs
-    daemon.rs
-    status.rs
-    doctor.rs
-    testcmd.rs
-    logs.rs
-    version.rs
-    actions.rs
-    util.rs
-    plugins/
-      mod.rs
-      ssh.rs
-      network.rs
-      dns.rs
-      oom.rs
-```
-
----
-
 ## Development build
-
-From inside the project directory:
 
 ```bash
 cargo fmt
 cargo build
 cargo build --release
-```
-
-Binary path:
-
-```text
-target/release/watchguard
 ```
 
 Run commands from source:
@@ -83,6 +25,51 @@ Run daemon manually:
 ```bash
 sudo cargo run -- daemon --config ./packaging/config.toml
 ```
+
+---
+
+## Plugin architecture
+
+Core files:
+
+```text
+src/plugin.rs
+src/registry.rs
+src/plugins/
+```
+
+`src/plugin.rs` defines:
+
+```text
+Plugin
+PluginStatus
+Health
+CheckState
+TickOutcome
+```
+
+`src/registry.rs` owns plugin registration:
+
+```rust
+pub fn build_plugins(cfg: &AppConfig) -> Vec<Box<dyn Plugin>> {
+    vec![
+        Box::new(OomPlugin::new(cfg)),
+        Box::new(SshServicePlugin::new(cfg)),
+        Box::new(SshTargetsPlugin::new(cfg)),
+        Box::new(NetworkPlugin::new(cfg)),
+        Box::new(DnsPlugin::new(cfg)),
+    ]
+}
+```
+
+To add a new health check:
+
+1. Add the config struct in `src/config.rs`.
+2. Add the TOML defaults in `packaging/config.toml`.
+3. Add a plugin module under `src/plugins/`.
+4. Implement the `Plugin` trait.
+5. Register it in `src/registry.rs`.
+6. Add CLI enable/disable support if it should be user-toggleable.
 
 ---
 
@@ -153,20 +140,6 @@ ss -tlnp | grep ':22'
 
 ## Ubuntu notes
 
-Install dependencies:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential curl pkg-config
-```
-
-Install Rust with rustup if needed:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-```
-
 Ubuntu commonly uses `ssh.service` instead of `sshd.service`.
 
 Update config:
@@ -181,41 +154,7 @@ service = "ssh.service"
 
 ---
 
-## RHEL / Rocky / Alma 9 native RPM build
-
-Install dependencies:
-
-```bash
-sudo dnf install -y rpm-build rust cargo systemd-rpm-macros tar gzip
-```
-
-From the parent directory containing `watchguard/`:
-
-```bash
-tar -czf watchguard-1.0.0.tar.gz watchguard
-rpmbuild -ta watchguard-1.0.0.tar.gz
-```
-
-RPM output:
-
-```text
-~/rpmbuild/RPMS/x86_64/watchguard-1.0.0-1.el9.x86_64.rpm
-```
-
-Install:
-
-```bash
-sudo dnf install -y ~/rpmbuild/RPMS/x86_64/watchguard-1.0.0-1.el9.x86_64.rpm
-sudo systemctl enable --now watchguard.service
-```
-
----
-
 ## Docker-based RHEL 9 RPM build from Manjaro, Arch, or Ubuntu
-
-Use this when your workstation is not RHEL 9.
-
-This avoids glibc compatibility problems from building on a newer distro.
 
 From the parent directory containing `watchguard/`:
 
@@ -249,62 +188,6 @@ Back on the host:
 ls -lh rpmbuild/RPMS/x86_64/
 ```
 
-Install on a RHEL-compatible host:
-
-```bash
-sudo dnf install -y watchguard-1.0.0-1.el9.x86_64.rpm
-sudo systemctl enable --now watchguard.service
-watchguard doctor
-```
-
----
-
-## Rebuild workflow
-
-From repo root:
-
-```bash
-cargo fmt
-cargo build --release
-
-sudo install -Dpm 0755 target/release/watchguard /usr/bin/watchguard
-sudo install -Dpm 0644 packaging/watchguard.service /etc/systemd/system/watchguard.service
-sudo systemctl daemon-reload
-sudo systemctl restart watchguard.service
-
-watchguard version
-watchguard test
-watchguard logs --boot --no-follow
-```
-
----
-
-## RPM rebuild workflow
-
-From the parent directory containing `watchguard/`:
-
-```bash
-rm -f watchguard-1.0.0.tar.gz
-tar -czf watchguard-1.0.0.tar.gz watchguard
-
-docker run --rm -it \
-  -v "$PWD":/work \
-  -w /work \
-  rockylinux:9 \
-  bash
-```
-
-Inside:
-
-```bash
-dnf install -y rpm-build rust cargo systemd-rpm-macros tar gzip
-
-rpmbuild \
-  --define "_topdir /work/rpmbuild" \
-  --define "debug_package %{nil}" \
-  -ta watchguard-1.0.0.tar.gz
-```
-
 ---
 
 ## Post-install checks
@@ -326,40 +209,20 @@ watchguard logs
 
 ---
 
-## Enable plugins
+## Rebuild workflow
 
-Enable SSH monitoring:
+From repo root:
 
 ```bash
-sudo watchguard enable ssh
+cargo fmt
+cargo build --release
+
+sudo install -Dpm 0755 target/release/watchguard /usr/bin/watchguard
 sudo systemctl restart watchguard.service
+
+watchguard version
 watchguard test
-```
-
-Enable network monitoring:
-
-```bash
-watchguard test --all
-sudo watchguard enable network
-sudo systemctl restart watchguard.service
-watchguard status
-```
-
-Enable DNS monitoring:
-
-```bash
-watchguard test --all
-sudo watchguard enable dns
-sudo systemctl restart watchguard.service
-watchguard status
-```
-
-Enable OOM monitoring:
-
-```bash
-sudo watchguard enable oom
-sudo systemctl restart watchguard.service
-watchguard status
+watchguard logs --boot --no-follow
 ```
 
 ---
@@ -377,14 +240,6 @@ rpmbuild \
   -ta watchguard-1.0.0.tar.gz
 ```
 
-### `%{_unitdir}` is undefined
-
-Use an explicit service path in the spec:
-
-```spec
-/usr/lib/systemd/system/watchguard.service
-```
-
 ### RPM built on Manjaro does not run on RHEL 9
 
 Build inside a Rocky/RHEL/Alma 9 container using Docker.
@@ -392,34 +247,3 @@ Build inside a Rocky/RHEL/Alma 9 container using Docker.
 ### systemd warning about `StartLimitIntervalSec`
 
 `StartLimitIntervalSec` and `StartLimitBurst` belong in `[Unit]`, not `[Service]`.
-
-Correct service section:
-
-```ini
-[Unit]
-Description=Watchguard Host Health Monitor
-Documentation=man:watchguard(8)
-After=network-online.target
-Wants=network-online.target
-
-StartLimitIntervalSec=60
-StartLimitBurst=10
-```
-
----
-
-## Useful commands
-
-```bash
-watchguard version
-watchguard status
-watchguard doctor
-watchguard test
-watchguard test --all
-watchguard logs
-watchguard logs --since "1 hour ago"
-watchguard logs --boot --no-follow
-watchguard config validate
-watchguard config show
-sudo watchguard config edit
-```

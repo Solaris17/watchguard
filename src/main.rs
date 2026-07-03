@@ -4,7 +4,10 @@ mod config;
 mod daemon;
 mod doctor;
 mod logs;
+mod plugin;
 mod plugins;
+mod plugins_cmd;
+mod registry;
 mod status;
 mod testcmd;
 mod util;
@@ -25,6 +28,8 @@ fn main() -> Result<()> {
         CliCommand::Doctor { config } => doctor::cmd_doctor(&config),
 
         CliCommand::Test { config, all } => testcmd::cmd_test(&config, all),
+
+        CliCommand::Plugins { config } => plugins_cmd::cmd_plugins(&config),
 
         CliCommand::Logs {
             unit,

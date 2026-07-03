@@ -41,6 +41,12 @@ pub enum CliCommand {
         all: bool,
     },
 
+    /// List registered plugins and metadata.
+    Plugins {
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+
     /// Follow Watchguard logs using journalctl.
     Logs {
         /// systemd unit to read logs for.
