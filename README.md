@@ -1,9 +1,8 @@
-
 # Watchguard
 
 Watchguard is a lightweight Rust-based host health monitor for systemd Linux servers.
 
-It is designed to sit close to the host and recover from the kinds of failures that can make a server hard to reach remotely:
+It is designed to sit close to the host and recover from failures that can make a server hard to reach remotely:
 
 - `sshd` service failures
 - SSH TCP reachability failures
@@ -11,9 +10,9 @@ It is designed to sit close to the host and recover from the kinds of failures t
 - DNS failures
 - Linux OOM events seen in journald
 
-Watchguard runs as a normal systemd service and can restart SSH or reboot the host depending on your configuration.
+Watchguard runs as a normal systemd service and can restart services, run commands, or reboot the host depending on your escalation policy.
 
-By default, all monitoring plugins are present in the config but disabled. This keeps a fresh install safe until you explicitly enable the checks you want.
+By default, all monitoring plugins are present in the config but disabled. Network and DNS use safe no-op escalation defaults.
 
 ---
 
@@ -24,6 +23,9 @@ By default, all monitoring plugins are present in the config but disabled. This 
 - Manual install support for Arch, Manjaro, Ubuntu, Debian, and other systemd hosts
 - Human-readable duration config values such as `500ms`, `5s`, `5m`, and `1h`
 - Real plugin trait architecture
+- Generic action engine
+- Strict escalation-only remediation model
+- `watchguard plugins` plugin metadata and escalation display
 - `watchguard doctor` diagnostics
 - `watchguard test` live one-shot probe checks
 - `watchguard logs` journal helper
@@ -50,6 +52,7 @@ Check the install:
 
 ```bash
 watchguard doctor
+watchguard plugins
 watchguard status
 watchguard test
 ```
@@ -69,6 +72,7 @@ watchguard status
 watchguard doctor
 watchguard test
 watchguard test --all
+watchguard plugins
 watchguard logs
 watchguard logs --since "1 hour ago"
 watchguard logs --boot --no-follow
@@ -80,8 +84,6 @@ Enable plugins:
 
 ```bash
 sudo watchguard enable ssh
-sudo watchguard enable ssh-service
-sudo watchguard enable ssh-targets
 sudo watchguard enable network
 sudo watchguard enable dns
 sudo watchguard enable oom
@@ -98,22 +100,158 @@ sudo watchguard disable oom
 sudo systemctl restart watchguard.service
 ```
 
-Remove a plugin config table:
+---
+
+## Action engine
+
+Watchguard uses one remediation model: escalation steps.
+
+Supported actions:
+
+| Action | Purpose |
+|---|---|
+| `none` | Log only; take no remediation |
+| `restart_service` | Restart a configured systemd service |
+| `run_command` | Run a configured command vector |
+| `reboot` | Run `[commands].reboot`, subject to boot grace and reboot cooldown |
+
+### `none`
+
+Safe no-op action:
+
+```toml
+{ after_failures = 6, action = "none" }
+```
+
+### `restart_service`
+
+Generic service restart:
+
+```toml
+{ after_failures = 3, action = "restart_service", service = "sshd.service" }
+```
+
+This runs:
 
 ```bash
-sudo watchguard disable ssh --remove
+/usr/bin/systemctl restart sshd.service
 ```
 
-Supported plugin names:
+### `run_command`
+
+Generic command execution:
+
+```toml
+{ after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] }
+```
+
+### `reboot`
+
+Reboot action:
+
+```toml
+{ after_failures = 9, action = "reboot" }
+```
+
+The reboot action is protected by:
+
+```toml
+[global]
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+```
+
+---
+
+## Escalation
+
+Each enabled check has a `failure_actions` list or a check-specific equivalent such as `service_failure_actions`.
+
+Example:
+
+```toml
+failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "example.service" },
+  { after_failures = 6, action = "run_command", command = ["/usr/local/bin/fix-example"] },
+  { after_failures = 9, action = "reboot" }
+]
+```
+
+Behavior:
 
 ```text
-ssh
-ssh-service
-ssh-targets
-network
-dns
-oom
+3 consecutive failures -> restart service
+6 consecutive failures -> run command
+9 consecutive failures -> reboot
+success -> reset counter
 ```
+
+After the final escalation step has fired, Watchguard repeats the final step periodically using the final step threshold. For example, a final step at 9 failures repeats at 18, 27, and so on while the failure remains unresolved.
+
+---
+
+## SSH escalation defaults
+
+The packaged SSH defaults are:
+
+```toml
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+```
+
+Since SSH is disabled by default, this only applies after enabling SSH monitoring:
+
+```bash
+sudo watchguard enable ssh
+sudo systemctl restart watchguard.service
+```
+
+---
+
+## Network and DNS safe defaults
+
+Network and DNS remain conservative by default:
+
+```toml
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
+```
+
+Example network escalation:
+
+```toml
+[network]
+enabled = true
+
+failure_actions = [
+  { after_failures = 6, action = "restart_service", service = "NetworkManager.service" },
+  { after_failures = 12, action = "reboot" }
+]
+```
+
+Example DNS escalation:
+
+```toml
+[dns]
+enabled = true
+
+failure_actions = [
+  { after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] },
+  { after_failures = 9, action = "reboot" }
+]
+```
+
+Only set reboot actions after validating your targets.
 
 ---
 
@@ -129,8 +267,7 @@ pub trait Plugin {
 
     fn enabled(&self) -> bool;
     fn interval(&self) -> Duration;
-    fn fail_limit(&self) -> u32;
-    fn failure_action(&self) -> Action;
+    fn escalation_steps(&self) -> Vec<EscalationStep>;
 
     fn update_config(&mut self, cfg: &AppConfig);
     fn probe(&mut self, rt: &Runtime) -> Result<bool>;
@@ -157,41 +294,6 @@ SshTargetsPlugin
 NetworkPlugin
 DnsPlugin
 ```
-
-To add a new plugin:
-
-1. Create a new file in `src/plugins/`.
-2. Define a plugin struct.
-3. Implement the `Plugin` trait.
-4. Add it to `src/plugins/mod.rs`.
-5. Add it to `src/registry.rs`.
-
-Example:
-
-```rust
-pub struct DiskPlugin {
-    cfg: DiskConfig,
-    state: CheckState,
-}
-
-impl Plugin for DiskPlugin {
-    fn id(&self) -> &'static str {
-        "disk"
-    }
-
-    fn name(&self) -> &'static str {
-        "Disk"
-    }
-
-    fn description(&self) -> &'static str {
-        "Monitors disk usage"
-    }
-
-    // implement remaining trait methods...
-}
-```
-
-The daemon does not need hardcoded knowledge of the plugin. It simply iterates over registered `Box<dyn Plugin>` values.
 
 ---
 
@@ -231,14 +333,6 @@ enabled = false
 enabled = false
 ```
 
-Network and DNS actions default to:
-
-```toml
-failure_action = "none"
-```
-
-Only set them to `reboot` after validating your targets.
-
 ---
 
 ## Build from source
@@ -252,6 +346,7 @@ Run from the source tree:
 
 ```bash
 cargo run -- config validate --config ./packaging/config.toml
+cargo run -- plugins --config ./packaging/config.toml
 cargo run -- status --config ./packaging/config.toml
 cargo run -- doctor --config ./packaging/config.toml
 cargo run -- test --config ./packaging/config.toml
@@ -277,6 +372,7 @@ Verify:
 
 ```bash
 watchguard doctor
+watchguard plugins
 watchguard status
 watchguard test
 watchguard logs --boot --no-follow
@@ -284,43 +380,19 @@ watchguard logs --boot --no-follow
 
 ---
 
-## Build a RHEL 9 compatible RPM using Docker
-
-From the directory containing the `watchguard/` project directory:
-
-```bash
-tar -czf watchguard-1.0.0.tar.gz watchguard
-mkdir -p rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-docker run --rm -it \
-  -v "$PWD":/work \
-  -w /work \
-  rockylinux:9 \
-  bash
-```
-
-Inside the container:
-
-```bash
-dnf install -y rpm-build rust cargo systemd-rpm-macros tar gzip
-
-rpmbuild \
-  --define "_topdir /work/rpmbuild" \
-  --define "debug_package %{nil}" \
-  -ta watchguard-1.0.0.tar.gz
-
-exit
-```
-
-The RPM will be created under:
-
-```text
-rpmbuild/RPMS/x86_64/
-```
-
----
-
 ## Troubleshooting
+
+### `watchguard test --all` fails disabled checks
+
+That is expected. `--all` means test configured plugins even if disabled.
+
+Use plain:
+
+```bash
+watchguard test
+```
+
+to test only enabled plugins.
 
 ### SSH `GetUnit` error
 
@@ -341,15 +413,3 @@ Check whether port 22 is listening:
 ```bash
 ss -tlnp | grep ':22'
 ```
-
-### `watchguard test --all` fails disabled checks
-
-That is expected. `--all` means test configured plugins even if disabled.
-
-Use plain:
-
-```bash
-watchguard test
-```
-
-to test only enabled plugins.

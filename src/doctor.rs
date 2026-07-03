@@ -71,16 +71,6 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
         failures += 1;
     }
 
-    if !cfg.commands.restart_ssh.is_empty() {
-        println!(
-            "✅ SSH restart command configured: {:?}",
-            cfg.commands.restart_ssh
-        );
-    } else {
-        println!("❌ SSH restart command missing");
-        failures += 1;
-    }
-
     let rt = Runtime::new().context("creating Tokio runtime")?;
     let mut plugins = registry::build_plugins(&cfg);
 

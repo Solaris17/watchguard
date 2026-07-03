@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
 use crate::{
-    config::{Action, AppConfig, NetworkConfig},
+    config::{AppConfig, EscalationStep, NetworkConfig},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
     util,
 };
@@ -47,12 +47,8 @@ impl Plugin for NetworkPlugin {
         self.cfg.check_interval
     }
 
-    fn fail_limit(&self) -> u32 {
-        self.cfg.fail_limit
-    }
-
-    fn failure_action(&self) -> Action {
-        self.cfg.failure_action
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        self.cfg.failure_actions.clone()
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -114,11 +110,11 @@ impl Plugin for NetworkPlugin {
         }
 
         let result = self.probe(rt);
+        let escalation_steps = self.escalation_steps();
 
         self.state.record(
             self.id(),
-            self.fail_limit(),
-            self.failure_action(),
+            &escalation_steps,
             self.failure_reason(),
             self.success_message(),
             result,

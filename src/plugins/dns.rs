@@ -11,7 +11,7 @@ use trust_dns_client::{
 };
 
 use crate::{
-    config::{Action, AppConfig, DnsConfig},
+    config::{AppConfig, DnsConfig, EscalationStep},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
 };
 
@@ -71,12 +71,8 @@ impl Plugin for DnsPlugin {
         self.cfg.check_interval
     }
 
-    fn fail_limit(&self) -> u32 {
-        self.cfg.fail_limit
-    }
-
-    fn failure_action(&self) -> Action {
-        self.cfg.failure_action
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        self.cfg.failure_actions.clone()
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -141,11 +137,11 @@ impl Plugin for DnsPlugin {
         }
 
         let result = self.probe(rt);
+        let escalation_steps = self.escalation_steps();
 
         self.state.record(
             self.id(),
-            self.fail_limit(),
-            self.failure_action(),
+            &escalation_steps,
             self.failure_reason(),
             self.success_message(),
             result,

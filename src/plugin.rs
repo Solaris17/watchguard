@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
-use crate::config::{Action, AppConfig};
+use crate::config::{Action, ActionPlan, AppConfig, EscalationStep};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
@@ -92,7 +92,7 @@ pub enum TickOutcome {
         failures: u32,
         limit: u32,
         error: Option<String>,
-        action: Option<Action>,
+        action: Option<ActionPlan>,
         reason: &'static str,
     },
     Fatal {
@@ -105,6 +105,7 @@ pub enum TickOutcome {
 pub struct CheckState {
     next_run: Instant,
     failures: u32,
+    last_action_at_failures: u32,
 }
 
 impl Default for CheckState {
@@ -112,6 +113,7 @@ impl Default for CheckState {
         Self {
             next_run: Instant::now(),
             failures: 0,
+            last_action_at_failures: 0,
         }
     }
 }
@@ -119,6 +121,7 @@ impl Default for CheckState {
 impl CheckState {
     pub fn reset_disabled(&mut self, now: Instant) {
         self.failures = 0;
+        self.last_action_at_failures = 0;
         self.next_run = now;
     }
 
@@ -134,13 +137,12 @@ impl CheckState {
     pub fn record(
         &mut self,
         plugin: &'static str,
-        fail_limit: u32,
-        action: Action,
+        escalation_steps: &[EscalationStep],
         failure_reason: &'static str,
         success_message: &'static str,
         result: Result<bool>,
     ) -> TickOutcome {
-        let fail_limit = fail_limit.max(1);
+        let plan = normalize_escalation_steps(escalation_steps);
 
         match result {
             Ok(true) => {
@@ -149,6 +151,7 @@ impl CheckState {
                 } else {
                     let failures = self.failures;
                     self.failures = 0;
+                    self.last_action_at_failures = 0;
 
                     TickOutcome::Recovered {
                         plugin,
@@ -157,50 +160,108 @@ impl CheckState {
                     }
                 }
             }
-            Ok(false) => self.record_failure(plugin, fail_limit, action, failure_reason, None),
-            Err(e) => self.record_failure(
-                plugin,
-                fail_limit,
-                action,
-                failure_reason,
-                Some(format!("{:#}", e)),
-            ),
+            Ok(false) => self.record_failure(plugin, &plan, failure_reason, None),
+            Err(e) => self.record_failure(plugin, &plan, failure_reason, Some(format!("{:#}", e))),
         }
     }
 
     fn record_failure(
         &mut self,
         plugin: &'static str,
-        fail_limit: u32,
-        action: Action,
+        plan: &[EscalationStep],
         failure_reason: &'static str,
         error: Option<String>,
     ) -> TickOutcome {
         self.failures += 1;
         let failures = self.failures;
+        let next_limit = next_action_threshold(plan, self.last_action_at_failures)
+            .unwrap_or_else(|| repeated_final_threshold(plan, self.last_action_at_failures));
 
-        if self.failures >= fail_limit {
-            self.failures = 0;
+        if let Some(step) = due_step(plan, failures, self.last_action_at_failures) {
+            let action_plan = step.action_plan();
+            self.last_action_at_failures = failures;
 
-            TickOutcome::Failure {
+            return TickOutcome::Failure {
                 plugin,
                 failures,
-                limit: fail_limit,
+                limit: step.after_failures,
                 error,
-                action: Some(action),
+                action: Some(action_plan),
                 reason: failure_reason,
-            }
-        } else {
-            TickOutcome::Failure {
-                plugin,
-                failures,
-                limit: fail_limit,
-                error,
-                action: None,
-                reason: failure_reason,
-            }
+            };
+        }
+
+        TickOutcome::Failure {
+            plugin,
+            failures,
+            limit: next_limit,
+            error,
+            action: None,
+            reason: failure_reason,
         }
     }
+}
+
+pub fn normalize_escalation_steps(steps: &[EscalationStep]) -> Vec<EscalationStep> {
+    let mut plan = steps
+        .iter()
+        .cloned()
+        .filter(|step| step.after_failures > 0)
+        .collect::<Vec<_>>();
+
+    plan.sort_by_key(|step| step.after_failures);
+    plan.dedup_by_key(|step| step.after_failures);
+
+    if plan.is_empty() {
+        plan.push(EscalationStep::new(1, Action::None));
+    }
+
+    plan
+}
+
+fn due_step(
+    plan: &[EscalationStep],
+    failures: u32,
+    last_action_at_failures: u32,
+) -> Option<EscalationStep> {
+    if let Some(step) = plan
+        .iter()
+        .filter(|step| step.after_failures > last_action_at_failures)
+        .filter(|step| failures >= step.after_failures)
+        .max_by_key(|step| step.after_failures)
+    {
+        return Some(step.clone());
+    }
+
+    let last = plan.last()?;
+
+    if last_action_at_failures >= last.after_failures
+        && failures >= last_action_at_failures.saturating_add(last.after_failures)
+    {
+        return Some(last.clone());
+    }
+
+    None
+}
+
+fn next_action_threshold(plan: &[EscalationStep], last_action_at_failures: u32) -> Option<u32> {
+    plan.iter()
+        .filter(|step| step.after_failures > last_action_at_failures)
+        .map(|step| step.after_failures)
+        .min()
+}
+
+fn repeated_final_threshold(plan: &[EscalationStep], last_action_at_failures: u32) -> u32 {
+    let repeat = plan
+        .last()
+        .map(|step| step.after_failures.max(1))
+        .unwrap_or(1);
+
+    last_action_at_failures.saturating_add(repeat).max(repeat)
+}
+
+pub fn resolved_escalation_steps_for(plugin: &dyn Plugin) -> Vec<EscalationStep> {
+    normalize_escalation_steps(&plugin.escalation_steps())
 }
 
 pub trait Plugin {
@@ -214,9 +275,7 @@ pub trait Plugin {
 
     fn interval(&self) -> Duration;
 
-    fn fail_limit(&self) -> u32;
-
-    fn failure_action(&self) -> Action;
+    fn escalation_steps(&self) -> Vec<EscalationStep>;
 
     fn failure_reason(&self) -> &'static str;
 

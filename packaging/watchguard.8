@@ -1,4 +1,3 @@
-
 .TH WATCHGUARD 8 "2026-07-03" "watchguard 1.0.0" "System Administration"
 .SH NAME
 watchguard \- plugin-based host health monitor for systemd Linux servers
@@ -14,12 +13,58 @@ is a lightweight Rust-based host health monitor for systemd Linux servers.
 
 It can monitor SSH service health, SSH TCP reachability, outbound network reachability, DNS resolution, and OOM events observed through journald.
 
-Watchguard uses a Rust plugin trait internally. Plugins are registered in
-.B src/registry.rs
-and implement the
-.B Plugin
-trait from
-.BR src/plugin.rs .
+Watchguard can restart services, run commands, or reboot the host depending on configuration. Reboot actions are protected by boot grace and reboot cooldown settings.
+
+.SH ACTIONS
+Watchguard uses one remediation model: escalation steps.
+
+Supported actions are:
+
+.TP
+.B none
+Log only; take no remediation.
+
+.TP
+.B restart_service
+Restart a configured systemd service. Requires a
+.B service
+field in the escalation step.
+
+.TP
+.B run_command
+Run a configured command vector. Requires a
+.B command
+field in the escalation step.
+
+.TP
+.B reboot
+Run the configured
+.B commands.reboot
+command, subject to boot grace and reboot cooldown.
+
+.SH ESCALATION
+Every enabled check uses an escalation list.
+
+Escalation example:
+
+.EX
+failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "example.service" },
+  { after_failures = 6, action = "run_command", command = ["/usr/local/bin/fix-example"] },
+  { after_failures = 9, action = "reboot" }
+]
+.EE
+
+This means:
+
+.EX
+3 consecutive failures -> restart service
+6 consecutive failures -> run command
+9 consecutive failures -> reboot
+success -> counter resets
+.EE
+
+After the final escalation step has fired, Watchguard repeats the final step periodically using the final step threshold while the failure remains unresolved.
 
 .SH COMMANDS
 .TP
@@ -39,6 +84,10 @@ Run diagnostic checks for config syntax, required commands, systemd, journald, a
 Run plugin probes once and exit. By default, only enabled plugins are tested. With
 .BR --all ,
 all configured plugins are tested even if disabled.
+
+.TP
+.B watchguard plugins [--config PATH]
+List registered plugins, metadata, enabled state, and escalation plans.
 
 .TP
 .B watchguard logs [--unit UNIT] [--since TIME] [-n LINES] [-b|--boot] [--no-follow]
@@ -77,25 +126,53 @@ Checks outbound TCP reachability to configured targets.
 .B dns
 Checks DNS resolution through a configured DNS server.
 
-.SH PLUGIN DEVELOPMENT
-A plugin implements the following core methods:
+.SH SSH ESCALATION DEFAULTS
+Packaged SSH defaults:
 
 .EX
-fn id(&self) -> &'static str;
-fn name(&self) -> &'static str;
-fn description(&self) -> &'static str;
-fn enabled(&self) -> bool;
-fn update_config(&mut self, cfg: &AppConfig);
-fn probe(&mut self, rt: &Runtime) -> Result<bool>;
-fn status(&mut self, rt: &Runtime) -> PluginStatus;
-fn test(&mut self, rt: &Runtime) -> PluginStatus;
-fn tick(&mut self, rt: &Runtime, now: Instant) -> TickOutcome;
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
 .EE
 
-To add a plugin, create a module under
-.BR src/plugins/ ,
-implement the trait, and register it in
-.BR src/registry.rs .
+All plugins are disabled by default, so these actions only apply after SSH monitoring is enabled.
+
+.SH NETWORK AND DNS SAFE DEFAULTS
+Network and DNS remain conservative by default:
+
+.EX
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
+.EE
+
+Example network escalation:
+
+.EX
+failure_actions = [
+  { after_failures = 6, action = "restart_service", service = "NetworkManager.service" },
+  { after_failures = 12, action = "reboot" }
+]
+.EE
+
+Example DNS escalation:
+
+.EX
+failure_actions = [
+  { after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] },
+  { after_failures = 9, action = "reboot" }
+]
+.EE
+
+Only use reboot escalation after validating targets.
 
 .SH CONFIGURATION
 The default configuration file is:
@@ -136,6 +213,12 @@ Run diagnostics:
 watchguard doctor
 .EE
 
+Show plugins and escalation plans:
+
+.EX
+watchguard plugins
+.EE
+
 Test enabled plugins:
 
 .EX
@@ -152,13 +235,6 @@ Enable SSH monitoring:
 
 .EX
 sudo watchguard enable ssh
-sudo systemctl restart watchguard.service
-.EE
-
-Enable OOM monitoring:
-
-.EX
-sudo watchguard enable oom
 sudo systemctl restart watchguard.service
 .EE
 

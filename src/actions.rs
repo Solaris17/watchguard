@@ -5,7 +5,7 @@ use std::{
 };
 use tracing::{error, warn};
 
-use crate::config::{Action, AppConfig};
+use crate::config::{Action, ActionPlan, AppConfig};
 
 pub fn run_cmd(argv: &[String]) -> Result<()> {
     let (prog, args) = argv.split_first().ok_or_else(|| anyhow!("empty command"))?;
@@ -41,22 +41,52 @@ pub fn cooldown_remaining(last: Option<Instant>, cfg: &AppConfig) -> Option<Dura
 }
 
 pub fn act(
-    action: Action,
+    plan: ActionPlan,
     cfg: &AppConfig,
     start_time: Instant,
     last_reboot_attempt: &mut Option<Instant>,
     reason: &str,
 ) {
-    match action {
+    match plan.action {
         Action::None => {
             warn!(reason, "action=none; no remediation taken");
         }
-        Action::Restart => {
-            warn!(reason, "action=restart ssh");
-            if let Err(e) = run_cmd(&cfg.commands.restart_ssh) {
-                error!(error=?e, "failed to restart SSH service");
+
+        Action::RestartService => {
+            let Some(service) = plan.service.as_deref().filter(|s| !s.trim().is_empty()) else {
+                error!(
+                    reason,
+                    "action=restart_service but no service was configured"
+                );
+                return;
+            };
+
+            let argv = vec![
+                "/usr/bin/systemctl".to_string(),
+                "restart".to_string(),
+                service.to_string(),
+            ];
+
+            warn!(reason, service, "action=restart_service");
+
+            if let Err(e) = run_cmd(&argv) {
+                error!(error=?e, service, "failed to restart service");
             }
         }
+
+        Action::RunCommand => {
+            if plan.command.is_empty() {
+                error!(reason, "action=run_command but command was empty");
+                return;
+            }
+
+            warn!(reason, command=?plan.command, "action=run_command");
+
+            if let Err(e) = run_cmd(&plan.command) {
+                error!(error=?e, command=?plan.command, "configured command failed");
+            }
+        }
+
         Action::Reboot => {
             if in_boot_grace(start_time, cfg) {
                 let remaining = cfg

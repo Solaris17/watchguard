@@ -17,12 +17,13 @@ pub const DEFAULT_CONFIG: &str = r#"# Watchguard configuration
 # Durations use human-readable syntax:
 #   500ms, 2s, 30s, 1m, 5m, 30m, 1h
 #
-# Safer RPM defaults:
+# Safe defaults:
 #   - all plugin sections are present
 #   - plugins start disabled
-#   - enable with: watchguard enable ssh|network|dns|oom
+#   - network and DNS remediation defaults to action = "none"
 #
-# For reboot-capable plugins, validate targets first before setting failure_action = "reboot".
+# Escalation is the only remediation model. A plugin's failure counter resets
+# only when its probe succeeds.
 
 [global]
 log_level = "info"
@@ -34,7 +35,6 @@ tick = "500ms"
 
 [commands]
 reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
-restart_ssh = ["/usr/bin/systemctl", "restart", "sshd.service"]
 
 [oom]
 enabled = false
@@ -53,29 +53,34 @@ enabled = false
 service_check_enabled = true
 service = "sshd.service"
 service_check_interval = "2s"
-service_fail_limit = 3
-service_failure_action = "restart"
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
 
 # SSH reachability checks.
 # This is TCP reachability to host:port, not credentialed SSH login.
 target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
-ssh_fail_limit = 3
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
 require_all = false
 
 targets = [
   "127.0.0.1:22"
 ]
 
-ssh_failure_action = "restart"
-
 [network]
 enabled = false
 
 check_interval = "5s"
 timeout = "1500ms"
-fail_limit = 6
 require_all = false
 
 targets = [
@@ -83,20 +88,32 @@ targets = [
   "8.8.8.8:443"
 ]
 
-# Keep as "none" until admins confirm the targets are reliable.
-failure_action = "none"
+# Safe default: log/no-op at 6 consecutive failures.
+# Example service restart + reboot escalation:
+# failure_actions = [
+#   { after_failures = 6, action = "restart_service", service = "NetworkManager.service" },
+#   { after_failures = 12, action = "reboot" }
+# ]
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
 
 [dns]
 enabled = false
 
 check_interval = "30s"
-fail_limit = 6
-
 server = "1.1.1.1:53"
 name = "example.com"
 
-# Keep as "none" until admins confirm DNS behavior is reliable.
-failure_action = "none"
+# Safe default: log/no-op at 6 consecutive failures.
+# Example command + reboot escalation:
+# failure_actions = [
+#   { after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] },
+#   { after_failures = 9, action = "reboot" }
+# ]
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
 "#;
 
 const DEFAULT_OOM_SECTION: &str = r#"
@@ -118,20 +135,26 @@ enabled = false
 service_check_enabled = true
 service = "sshd.service"
 service_check_interval = "2s"
-service_fail_limit = 3
-service_failure_action = "restart"
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
 
 target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
-ssh_fail_limit = 3
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
 require_all = false
 
 targets = [
   "127.0.0.1:22"
 ]
-
-ssh_failure_action = "restart"
 "#;
 
 const DEFAULT_NETWORK_SECTION: &str = r#"
@@ -140,7 +163,6 @@ enabled = false
 
 check_interval = "5s"
 timeout = "1500ms"
-fail_limit = 6
 require_all = false
 
 targets = [
@@ -148,7 +170,9 @@ targets = [
   "8.8.8.8:443"
 ]
 
-failure_action = "none"
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
 "#;
 
 const DEFAULT_DNS_SECTION: &str = r#"
@@ -156,12 +180,12 @@ const DEFAULT_DNS_SECTION: &str = r#"
 enabled = false
 
 check_interval = "30s"
-fail_limit = 6
-
 server = "1.1.1.1:53"
 name = "example.com"
 
-failure_action = "none"
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
 "#;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -218,7 +242,6 @@ impl Default for GlobalConfig {
 #[serde(default)]
 pub struct CommandsConfig {
     pub reboot: Vec<String>,
-    pub restart_ssh: Vec<String>,
 }
 
 impl Default for CommandsConfig {
@@ -229,11 +252,6 @@ impl Default for CommandsConfig {
                 "reboot".to_string(),
                 "--force".to_string(),
                 "--force".to_string(),
-            ],
-            restart_ssh: vec![
-                "/usr/bin/systemctl".to_string(),
-                "restart".to_string(),
-                "sshd.service".to_string(),
             ],
         }
     }
@@ -271,8 +289,7 @@ pub struct SshConfig {
     #[serde(with = "humantime_serde")]
     pub service_check_interval: Duration,
 
-    pub service_fail_limit: u32,
-    pub service_failure_action: Action,
+    pub service_failure_actions: Vec<EscalationStep>,
 
     pub target_check_enabled: bool,
 
@@ -282,10 +299,9 @@ pub struct SshConfig {
     #[serde(with = "humantime_serde")]
     pub ssh_timeout: Duration,
 
-    pub ssh_fail_limit: u32,
     pub require_all: bool,
     pub targets: Vec<String>,
-    pub ssh_failure_action: Action,
+    pub ssh_failure_actions: Vec<EscalationStep>,
 }
 
 impl Default for SshConfig {
@@ -295,15 +311,21 @@ impl Default for SshConfig {
             service_check_enabled: true,
             service: "sshd.service".to_string(),
             service_check_interval: Duration::from_secs(2),
-            service_fail_limit: 3,
-            service_failure_action: Action::Restart,
+            service_failure_actions: vec![
+                EscalationStep::restart_service(3, "sshd.service"),
+                EscalationStep::restart_service(6, "sshd.service"),
+                EscalationStep::new(9, Action::Reboot),
+            ],
             target_check_enabled: true,
             ssh_check_interval: Duration::from_secs(5),
             ssh_timeout: Duration::from_millis(1500),
-            ssh_fail_limit: 3,
             require_all: false,
             targets: vec!["127.0.0.1:22".to_string()],
-            ssh_failure_action: Action::Restart,
+            ssh_failure_actions: vec![
+                EscalationStep::restart_service(3, "sshd.service"),
+                EscalationStep::restart_service(6, "sshd.service"),
+                EscalationStep::new(9, Action::Reboot),
+            ],
         }
     }
 }
@@ -319,10 +341,9 @@ pub struct NetworkConfig {
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
 
-    pub fail_limit: u32,
     pub require_all: bool,
     pub targets: Vec<String>,
-    pub failure_action: Action,
+    pub failure_actions: Vec<EscalationStep>,
 }
 
 impl Default for NetworkConfig {
@@ -331,10 +352,9 @@ impl Default for NetworkConfig {
             enabled: false,
             check_interval: Duration::from_secs(5),
             timeout: Duration::from_millis(1500),
-            fail_limit: 6,
             require_all: false,
             targets: vec!["1.1.1.1:443".to_string(), "8.8.8.8:443".to_string()],
-            failure_action: Action::None,
+            failure_actions: vec![EscalationStep::new(6, Action::None)],
         }
     }
 }
@@ -347,10 +367,9 @@ pub struct DnsConfig {
     #[serde(with = "humantime_serde")]
     pub check_interval: Duration,
 
-    pub fail_limit: u32,
     pub server: String,
     pub name: String,
-    pub failure_action: Action,
+    pub failure_actions: Vec<EscalationStep>,
 }
 
 impl Default for DnsConfig {
@@ -358,25 +377,100 @@ impl Default for DnsConfig {
         Self {
             enabled: false,
             check_interval: Duration::from_secs(30),
-            fail_limit: 6,
             server: "1.1.1.1:53".to_string(),
             name: "example.com".to_string(),
-            failure_action: Action::None,
+            failure_actions: vec![EscalationStep::new(6, Action::None)],
         }
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    Restart,
-    Reboot,
     None,
+
+    /// Generic systemd service restart. Requires `service = "name.service"` in the action step.
+    RestartService,
+
+    /// Runs an arbitrary command vector. Requires `command = [...]` in the action step.
+    RunCommand,
+
+    /// Runs commands.reboot, subject to boot grace and reboot cooldown.
+    Reboot,
 }
 
 impl Default for Action {
     fn default() -> Self {
         Action::None
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionPlan {
+    pub action: Action,
+    pub service: Option<String>,
+    pub command: Vec<String>,
+}
+
+impl ActionPlan {
+    pub fn from_action(action: Action) -> Self {
+        Self {
+            action,
+            service: None,
+            command: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct EscalationStep {
+    pub after_failures: u32,
+    pub action: Action,
+
+    /// Used when action = "restart_service".
+    pub service: Option<String>,
+
+    /// Used when action = "run_command".
+    pub command: Vec<String>,
+}
+
+impl EscalationStep {
+    pub fn new(after_failures: u32, action: Action) -> Self {
+        Self {
+            after_failures,
+            action,
+            service: None,
+            command: Vec::new(),
+        }
+    }
+
+    pub fn restart_service(after_failures: u32, service: impl Into<String>) -> Self {
+        Self {
+            after_failures,
+            action: Action::RestartService,
+            service: Some(service.into()),
+            command: Vec::new(),
+        }
+    }
+
+    pub fn action_plan(&self) -> ActionPlan {
+        ActionPlan {
+            action: self.action,
+            service: self.service.clone(),
+            command: self.command.clone(),
+        }
+    }
+}
+
+impl Default for EscalationStep {
+    fn default() -> Self {
+        Self {
+            after_failures: 1,
+            action: Action::None,
+            service: None,
+            command: Vec::new(),
+        }
     }
 }
 
@@ -404,15 +498,19 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
         return Err(anyhow!("commands.reboot must not be empty"));
     }
 
-    if cfg.commands.restart_ssh.is_empty() {
-        return Err(anyhow!("commands.restart_ssh must not be empty"));
-    }
-
     if cfg.oom.enabled && cfg.oom.patterns.is_empty() {
         return Err(anyhow!(
             "oom.patterns must not be empty when oom.enabled=true"
         ));
     }
+
+    validate_escalation_steps(
+        "ssh.service_failure_actions",
+        &cfg.ssh.service_failure_actions,
+    )?;
+    validate_escalation_steps("ssh.ssh_failure_actions", &cfg.ssh.ssh_failure_actions)?;
+    validate_escalation_steps("network.failure_actions", &cfg.network.failure_actions)?;
+    validate_escalation_steps("dns.failure_actions", &cfg.dns.failure_actions)?;
 
     if cfg.ssh.enabled {
         if cfg.ssh.service_check_enabled {
@@ -420,8 +518,10 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
                 return Err(anyhow!("ssh.service must not be empty"));
             }
 
-            if cfg.ssh.service_fail_limit == 0 {
-                return Err(anyhow!("ssh.service_fail_limit must be >= 1"));
+            if cfg.ssh.service_failure_actions.is_empty() {
+                return Err(anyhow!(
+                    "ssh.service_failure_actions must not be empty when ssh service checks are enabled"
+                ));
             }
         }
 
@@ -430,8 +530,10 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
                 return Err(anyhow!("ssh.targets must not be empty"));
             }
 
-            if cfg.ssh.ssh_fail_limit == 0 {
-                return Err(anyhow!("ssh.ssh_fail_limit must be >= 1"));
+            if cfg.ssh.ssh_failure_actions.is_empty() {
+                return Err(anyhow!(
+                    "ssh.ssh_failure_actions must not be empty when SSH target checks are enabled"
+                ));
             }
 
             util::validate_targets("ssh.targets", &cfg.ssh.targets)?;
@@ -443,22 +545,71 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
             return Err(anyhow!("network.targets must not be empty"));
         }
 
-        if cfg.network.fail_limit == 0 {
-            return Err(anyhow!("network.fail_limit must be >= 1"));
+        if cfg.network.failure_actions.is_empty() {
+            return Err(anyhow!(
+                "network.failure_actions must not be empty when network.enabled=true"
+            ));
         }
 
         util::validate_targets("network.targets", &cfg.network.targets)?;
     }
 
     if cfg.dns.enabled {
-        if cfg.dns.fail_limit == 0 {
-            return Err(anyhow!("dns.fail_limit must be >= 1"));
+        if cfg.dns.failure_actions.is_empty() {
+            return Err(anyhow!(
+                "dns.failure_actions must not be empty when dns.enabled=true"
+            ));
         }
 
         util::validate_socket_addr("dns.server", &cfg.dns.server)?;
 
         if cfg.dns.name.trim().is_empty() {
             return Err(anyhow!("dns.name must not be empty"));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_escalation_steps(label: &str, steps: &[EscalationStep]) -> Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+
+    for step in steps {
+        if step.after_failures == 0 {
+            return Err(anyhow!(
+                "{} contains after_failures=0; after_failures must be >= 1",
+                label
+            ));
+        }
+
+        if !seen.insert(step.after_failures) {
+            return Err(anyhow!(
+                "{} contains duplicate after_failures={}",
+                label,
+                step.after_failures
+            ));
+        }
+
+        match step.action {
+            Action::RestartService => {
+                if step.service.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(anyhow!(
+                        "{} step after_failures={} uses action=restart_service but service is empty",
+                        label,
+                        step.after_failures
+                    ));
+                }
+            }
+            Action::RunCommand => {
+                if step.command.is_empty() {
+                    return Err(anyhow!(
+                        "{} step after_failures={} uses action=run_command but command is empty",
+                        label,
+                        step.after_failures
+                    ));
+                }
+            }
+            Action::None | Action::Reboot => {}
         }
     }
 
@@ -500,6 +651,7 @@ pub fn cmd_config_validate(config_path: &str) -> Result<()> {
             println!("✅ SSH plugin");
             println!("✅ Network plugin");
             println!("✅ DNS plugin");
+            println!("✅ Escalation plans");
             println!();
             println!("Configuration is valid.");
             Ok(())

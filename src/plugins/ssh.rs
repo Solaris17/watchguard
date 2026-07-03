@@ -4,7 +4,7 @@ use tokio::runtime::Runtime;
 use zbus::Connection;
 
 use crate::{
-    config::{Action, AppConfig, SshConfig},
+    config::{AppConfig, EscalationStep, SshConfig},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
     util,
 };
@@ -83,12 +83,8 @@ impl Plugin for SshServicePlugin {
         self.cfg.service_check_interval
     }
 
-    fn fail_limit(&self) -> u32 {
-        self.cfg.service_fail_limit
-    }
-
-    fn failure_action(&self) -> Action {
-        self.cfg.service_failure_action
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        self.cfg.service_failure_actions.clone()
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -142,11 +138,11 @@ impl Plugin for SshServicePlugin {
         }
 
         let result = self.probe(rt);
+        let escalation_steps = self.escalation_steps();
 
         self.state.record(
             self.id(),
-            self.fail_limit(),
-            self.failure_action(),
+            &escalation_steps,
             self.failure_reason(),
             self.success_message(),
             result,
@@ -189,12 +185,8 @@ impl Plugin for SshTargetsPlugin {
         self.cfg.ssh_check_interval
     }
 
-    fn fail_limit(&self) -> u32 {
-        self.cfg.ssh_fail_limit
-    }
-
-    fn failure_action(&self) -> Action {
-        self.cfg.ssh_failure_action
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        self.cfg.ssh_failure_actions.clone()
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -256,11 +248,11 @@ impl Plugin for SshTargetsPlugin {
         }
 
         let result = self.probe(rt);
+        let escalation_steps = self.escalation_steps();
 
         self.state.record(
             self.id(),
-            self.fail_limit(),
-            self.failure_action(),
+            &escalation_steps,
             self.failure_reason(),
             self.success_message(),
             result,

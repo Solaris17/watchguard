@@ -3,17 +3,13 @@
 # Durations use human-readable syntax:
 #   500ms, 2s, 30s, 1m, 5m, 30m, 1h
 #
-# Enable plugins with:
-#   watchguard enable ssh
-#   watchguard enable network
-#   watchguard enable dns
-#   watchguard enable oom
+# Safe defaults:
+#   - all plugin sections are present
+#   - plugins start disabled
+#   - network and DNS remediation defaults to action = "none"
 #
-# Disable plugins with:
-#   watchguard disable ssh
-#
-# Remove plugin config entirely with:
-#   watchguard disable ssh --remove
+# Escalation is the only remediation model. A plugin's failure counter resets
+# only when its probe succeeds.
 
 [global]
 log_level = "info"
@@ -25,7 +21,6 @@ tick = "500ms"
 
 [commands]
 reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
-restart_ssh = ["/usr/bin/systemctl", "restart", "sshd.service"]
 
 [oom]
 enabled = false
@@ -43,27 +38,32 @@ enabled = false
 service_check_enabled = true
 service = "sshd.service"
 service_check_interval = "2s"
-service_fail_limit = 3
-service_failure_action = "restart"
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
 
 target_check_enabled = true
 ssh_check_interval = "5s"
 ssh_timeout = "1500ms"
-ssh_fail_limit = 3
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
 require_all = false
 
 targets = [
   "127.0.0.1:22"
 ]
 
-ssh_failure_action = "restart"
-
 [network]
 enabled = false
 
 check_interval = "5s"
 timeout = "1500ms"
-fail_limit = 6
 require_all = false
 
 targets = [
@@ -71,15 +71,29 @@ targets = [
   "8.8.8.8:443"
 ]
 
-failure_action = "none"
+# Safe default: log/no-op at 6 consecutive failures.
+# Example service restart + reboot escalation:
+# failure_actions = [
+#   { after_failures = 6, action = "restart_service", service = "NetworkManager.service" },
+#   { after_failures = 12, action = "reboot" }
+# ]
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
 
 [dns]
 enabled = false
 
 check_interval = "30s"
-fail_limit = 6
-
 server = "1.1.1.1:53"
 name = "example.com"
 
-failure_action = "none"
+# Safe default: log/no-op at 6 consecutive failures.
+# Example command + reboot escalation:
+# failure_actions = [
+#   { after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] },
+#   { after_failures = 9, action = "reboot" }
+# ]
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]

@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 use tracing::{debug, warn};
 
 use crate::{
-    config::{Action, AppConfig, OomConfig},
+    config::{Action, ActionPlan, AppConfig, EscalationStep, OomConfig},
     plugin::{CheckState, Plugin, PluginStatus, TickOutcome},
     util,
 };
@@ -150,12 +150,8 @@ impl Plugin for OomPlugin {
         self.interval
     }
 
-    fn fail_limit(&self) -> u32 {
-        1
-    }
-
-    fn failure_action(&self) -> Action {
-        Action::Reboot
+    fn escalation_steps(&self) -> Vec<EscalationStep> {
+        vec![EscalationStep::new(1, Action::Reboot)]
     }
 
     fn failure_reason(&self) -> &'static str {
@@ -268,7 +264,7 @@ impl Plugin for OomPlugin {
                 failures: 1,
                 limit: 1,
                 error: None,
-                action: Some(Action::Reboot),
+                action: Some(ActionPlan::from_action(Action::Reboot)),
                 reason: self.failure_reason(),
             }
         } else {
