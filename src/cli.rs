@@ -25,10 +25,43 @@ pub enum CliCommand {
         config: String,
     },
 
-    /// Run environment/config checks useful for troubleshooting.
+    /// Run environment, config, and live probe diagnostics.
     Doctor {
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+    },
+
+    /// Run each enabled plugin check once.
+    Test {
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+
+        /// Test all configured plugins, even if disabled.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Follow Watchguard logs using journalctl.
+    Logs {
+        /// systemd unit to read logs for.
+        #[arg(long, default_value = "watchguard.service")]
+        unit: String,
+
+        /// Show logs since this time, e.g. "1 hour ago", "today", "2026-07-03 12:00".
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Number of lines to show before following.
+        #[arg(short = 'n', long)]
+        lines: Option<u32>,
+
+        /// Show logs from the current boot.
+        #[arg(short = 'b', long)]
+        boot: bool,
+
+        /// Do not follow logs.
+        #[arg(long)]
+        no_follow: bool,
     },
 
     /// Enable a plugin or sub-test.
@@ -57,7 +90,7 @@ pub enum CliCommand {
         command: ConfigCommand,
     },
 
-    /// Print Watchguard version.
+    /// Print Watchguard version and build metadata.
     Version,
 }
 

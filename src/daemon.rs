@@ -3,7 +3,7 @@ use std::{
     process::Child,
     sync::mpsc,
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
@@ -13,6 +13,155 @@ use crate::{
     config::{self, Action, AppConfig},
     plugins,
 };
+
+type EnabledFn = fn(&AppConfig) -> bool;
+type IntervalFn = fn(&AppConfig) -> Duration;
+type LimitFn = fn(&AppConfig) -> u32;
+type ActionFn = fn(&AppConfig) -> Action;
+type CheckFn = fn(&AppConfig, &Runtime) -> Result<bool>;
+
+struct PeriodicCheck {
+    id: &'static str,
+    success_message: &'static str,
+    failure_reason: &'static str,
+    next: Instant,
+    fails: u32,
+    enabled: EnabledFn,
+    interval: IntervalFn,
+    limit: LimitFn,
+    action: ActionFn,
+    check: CheckFn,
+}
+
+impl PeriodicCheck {
+    fn run_if_due(
+        &mut self,
+        cfg: &AppConfig,
+        rt: &Runtime,
+        now: Instant,
+        start_time: Instant,
+        last_reboot_attempt: &mut Option<Instant>,
+    ) {
+        if !(self.enabled)(cfg) {
+            self.fails = 0;
+            self.next = now;
+            return;
+        }
+
+        if now < self.next {
+            return;
+        }
+
+        self.next = now + (self.interval)(cfg);
+
+        match (self.check)(cfg, rt) {
+            Ok(true) => {
+                if self.fails != 0 {
+                    info!(
+                        plugin = self.id,
+                        fails = self.fails,
+                        "{}",
+                        self.success_message
+                    );
+                }
+                self.fails = 0;
+            }
+            Ok(false) => self.record_failure(cfg, start_time, last_reboot_attempt, None),
+            Err(e) => self.record_failure(cfg, start_time, last_reboot_attempt, Some(e)),
+        }
+    }
+
+    fn record_failure(
+        &mut self,
+        cfg: &AppConfig,
+        start_time: Instant,
+        last_reboot_attempt: &mut Option<Instant>,
+        error: Option<anyhow::Error>,
+    ) {
+        self.fails += 1;
+
+        if let Some(error) = error {
+            warn!(
+                plugin=self.id,
+                error=?error,
+                fails=self.fails,
+                limit=(self.limit)(cfg),
+                "plugin check error"
+            );
+        } else {
+            warn!(
+                plugin = self.id,
+                fails = self.fails,
+                limit = (self.limit)(cfg),
+                "plugin check failed"
+            );
+        }
+
+        if self.fails >= (self.limit)(cfg) {
+            actions::act(
+                (self.action)(cfg),
+                cfg,
+                start_time,
+                last_reboot_attempt,
+                self.failure_reason,
+            );
+            self.fails = 0;
+        }
+    }
+}
+
+fn registered_checks() -> Vec<PeriodicCheck> {
+    vec![
+        PeriodicCheck {
+            id: "ssh-service",
+            success_message: "SSH service recovered",
+            failure_reason: "SSH service failure limit exceeded",
+            next: Instant::now(),
+            fails: 0,
+            enabled: |cfg| cfg.ssh.enabled && cfg.ssh.service_check_enabled,
+            interval: |cfg| cfg.ssh.service_check_interval,
+            limit: |cfg| cfg.ssh.service_fail_limit,
+            action: |cfg| cfg.ssh.service_failure_action,
+            check: |cfg, rt| rt.block_on(plugins::ssh::systemd_unit_is_active(&cfg.ssh.service)),
+        },
+        PeriodicCheck {
+            id: "ssh-targets",
+            success_message: "SSH target reachability recovered",
+            failure_reason: "SSH target reachability failure limit exceeded",
+            next: Instant::now(),
+            fails: 0,
+            enabled: |cfg| cfg.ssh.enabled && cfg.ssh.target_check_enabled,
+            interval: |cfg| cfg.ssh.ssh_check_interval,
+            limit: |cfg| cfg.ssh.ssh_fail_limit,
+            action: |cfg| cfg.ssh.ssh_failure_action,
+            check: |cfg, _rt| Ok(plugins::ssh::targets_ok(&cfg.ssh)),
+        },
+        PeriodicCheck {
+            id: "network",
+            success_message: "Network reachability recovered",
+            failure_reason: "Network failure limit exceeded",
+            next: Instant::now(),
+            fails: 0,
+            enabled: |cfg| cfg.network.enabled,
+            interval: |cfg| cfg.network.check_interval,
+            limit: |cfg| cfg.network.fail_limit,
+            action: |cfg| cfg.network.failure_action,
+            check: |cfg, _rt| Ok(plugins::network::check(&cfg.network)),
+        },
+        PeriodicCheck {
+            id: "dns",
+            success_message: "DNS recovered",
+            failure_reason: "DNS failure limit exceeded",
+            next: Instant::now(),
+            fails: 0,
+            enabled: |cfg| cfg.dns.enabled,
+            interval: |cfg| cfg.dns.check_interval,
+            limit: |cfg| cfg.dns.fail_limit,
+            action: |cfg| cfg.dns.failure_action,
+            check: |cfg, _rt| Ok(plugins::dns::check(&cfg.dns)),
+        },
+    ]
+}
 
 pub fn daemon_loop(config_path: &str) -> Result<()> {
     let initial_cfg = config::load_config(config_path)?;
@@ -29,15 +178,7 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
     let mut oom_child: Option<Child> = None;
     let mut oom_signature: Option<Vec<String>> = None;
 
-    let mut next_service = Instant::now();
-    let mut next_ssh_targets = Instant::now();
-    let mut next_network = Instant::now();
-    let mut next_dns = Instant::now();
-
-    let mut service_fails = 0_u32;
-    let mut ssh_target_fails = 0_u32;
-    let mut network_fails = 0_u32;
-    let mut dns_fails = 0_u32;
+    let mut checks = registered_checks();
 
     loop {
         let cfg = match config::load_config(config_path) {
@@ -74,156 +215,8 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
 
         let now = Instant::now();
 
-        if cfg.ssh.enabled && cfg.ssh.service_check_enabled && now >= next_service {
-            next_service = now + cfg.ssh.service_check_interval;
-
-            match rt.block_on(plugins::ssh::systemd_unit_is_active(&cfg.ssh.service)) {
-                Ok(true) => {
-                    if service_fails != 0 {
-                        info!(fails=service_fails, "SSH service recovered");
-                    }
-                    service_fails = 0;
-                }
-                Ok(false) => {
-                    service_fails += 1;
-                    warn!(
-                        service=%cfg.ssh.service,
-                        fails=service_fails,
-                        limit=cfg.ssh.service_fail_limit,
-                        "SSH service is not active"
-                    );
-
-                    if service_fails >= cfg.ssh.service_fail_limit {
-                        actions::act(
-                            cfg.ssh.service_failure_action,
-                            &cfg,
-                            start_time,
-                            &mut last_reboot_attempt,
-                            "SSH service failure limit exceeded",
-                        );
-                        service_fails = 0;
-                    }
-                }
-                Err(e) => {
-                    service_fails += 1;
-                    warn!(
-                        error=?e,
-                        fails=service_fails,
-                        limit=cfg.ssh.service_fail_limit,
-                        "SSH service check error"
-                    );
-
-                    if service_fails >= cfg.ssh.service_fail_limit {
-                        actions::act(
-                            cfg.ssh.service_failure_action,
-                            &cfg,
-                            start_time,
-                            &mut last_reboot_attempt,
-                            "SSH service check error limit exceeded",
-                        );
-                        service_fails = 0;
-                    }
-                }
-            }
-        }
-
-        if cfg.ssh.enabled && cfg.ssh.target_check_enabled && now >= next_ssh_targets {
-            next_ssh_targets = now + cfg.ssh.ssh_check_interval;
-
-            let ok = plugins::ssh::targets_ok(&cfg.ssh);
-
-            if ok {
-                if ssh_target_fails != 0 {
-                    info!(fails=ssh_target_fails, "SSH target reachability recovered");
-                }
-                ssh_target_fails = 0;
-            } else {
-                ssh_target_fails += 1;
-                warn!(
-                    fails=ssh_target_fails,
-                    limit=cfg.ssh.ssh_fail_limit,
-                    require_all=cfg.ssh.require_all,
-                    targets=?cfg.ssh.targets,
-                    "SSH target reachability failed"
-                );
-
-                if ssh_target_fails >= cfg.ssh.ssh_fail_limit {
-                    actions::act(
-                        cfg.ssh.ssh_failure_action,
-                        &cfg,
-                        start_time,
-                        &mut last_reboot_attempt,
-                        "SSH target reachability failure limit exceeded",
-                    );
-                    ssh_target_fails = 0;
-                }
-            }
-        }
-
-        if cfg.network.enabled && now >= next_network {
-            next_network = now + cfg.network.check_interval;
-
-            let ok = plugins::network::check(&cfg.network);
-
-            if ok {
-                if network_fails != 0 {
-                    info!(fails=network_fails, "network reachability recovered");
-                }
-                network_fails = 0;
-            } else {
-                network_fails += 1;
-                warn!(
-                    fails=network_fails,
-                    limit=cfg.network.fail_limit,
-                    require_all=cfg.network.require_all,
-                    targets=?cfg.network.targets,
-                    "network reachability failed"
-                );
-
-                if network_fails >= cfg.network.fail_limit {
-                    actions::act(
-                        cfg.network.failure_action,
-                        &cfg,
-                        start_time,
-                        &mut last_reboot_attempt,
-                        "network failure limit exceeded",
-                    );
-                    network_fails = 0;
-                }
-            }
-        }
-
-        if cfg.dns.enabled && now >= next_dns {
-            next_dns = now + cfg.dns.check_interval;
-
-            let ok = plugins::dns::check(&cfg.dns);
-
-            if ok {
-                if dns_fails != 0 {
-                    info!(fails=dns_fails, "DNS recovered");
-                }
-                dns_fails = 0;
-            } else {
-                dns_fails += 1;
-                warn!(
-                    fails=dns_fails,
-                    limit=cfg.dns.fail_limit,
-                    server=%cfg.dns.server,
-                    name=%cfg.dns.name,
-                    "DNS check failed"
-                );
-
-                if dns_fails >= cfg.dns.fail_limit {
-                    actions::act(
-                        cfg.dns.failure_action,
-                        &cfg,
-                        start_time,
-                        &mut last_reboot_attempt,
-                        "DNS failure limit exceeded",
-                    );
-                    dns_fails = 0;
-                }
-            }
+        for check in checks.iter_mut() {
+            check.run_if_due(&cfg, &rt, now, start_time, &mut last_reboot_attempt);
         }
 
         thread::sleep(cfg.global.tick);

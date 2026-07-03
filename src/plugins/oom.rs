@@ -37,7 +37,7 @@ pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().flatten() {
-            debug!(target="oom", "journalctl stderr: {}", line);
+            debug!(target = "oom", "journalctl stderr: {}", line);
         }
     });
 
@@ -48,7 +48,7 @@ pub fn spawn_watcher(patterns: Vec<String>, oom_tx: mpsc::Sender<()>) -> Result<
             let lower = line.to_lowercase();
 
             if patterns.iter().any(|p| lower.contains(p)) {
-                warn!(target="oom", "OOM pattern matched: {}", line);
+                warn!(target = "oom", "OOM pattern matched: {}", line);
                 let _ = oom_tx.send(());
             }
         }

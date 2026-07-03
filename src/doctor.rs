@@ -63,7 +63,10 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
     }
 
     if !cfg.commands.restart_ssh.is_empty() {
-        println!("✅ SSH restart command configured: {:?}", cfg.commands.restart_ssh);
+        println!(
+            "✅ SSH restart command configured: {:?}",
+            cfg.commands.restart_ssh
+        );
     } else {
         println!("❌ SSH restart command missing");
         failures += 1;
@@ -111,9 +114,15 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
 
     if cfg.dns.enabled {
         if plugins::dns::check(&cfg.dns) {
-            println!("✅ DNS probe succeeded: {} via {}", cfg.dns.name, cfg.dns.server);
+            println!(
+                "✅ DNS probe succeeded: {} via {}",
+                cfg.dns.name, cfg.dns.server
+            );
         } else {
-            println!("⚠️  DNS probe failed: {} via {}", cfg.dns.name, cfg.dns.server);
+            println!(
+                "⚠️  DNS probe failed: {} via {}",
+                cfg.dns.name, cfg.dns.server
+            );
             warnings += 1;
         }
     } else {
@@ -146,7 +155,10 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
     println!();
 
     if failures > 0 {
-        println!("Overall Health: ❌ FAILED ({} failure(s), {} warning(s))", failures, warnings);
+        println!(
+            "Overall Health: ❌ FAILED ({} failure(s), {} warning(s))",
+            failures, warnings
+        );
     } else if warnings > 0 {
         println!("Overall Health: ⚠️  WARNING ({} warning(s))", warnings);
     } else {

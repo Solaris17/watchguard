@@ -27,7 +27,10 @@ pub fn cmd_status(config_path: &str) -> Result<()> {
         if cfg.ssh.service_check_enabled {
             match rt.block_on(plugins::ssh::systemd_unit_is_active(&cfg.ssh.service)) {
                 Ok(true) => println!("✅ ssh-service  enabled   {} is active", cfg.ssh.service),
-                Ok(false) => println!("⚠️  ssh-service  enabled   {} is not active", cfg.ssh.service),
+                Ok(false) => println!(
+                    "⚠️  ssh-service  enabled   {} is not active",
+                    cfg.ssh.service
+                ),
                 Err(e) => println!("⚠️  ssh-service  enabled   status error: {}", e),
             }
         } else {
@@ -77,7 +80,10 @@ pub fn cmd_status(config_path: &str) -> Result<()> {
         let ok = plugins::dns::check(&cfg.dns);
 
         if ok {
-            println!("✅ dns          enabled   {} via {}", cfg.dns.name, cfg.dns.server);
+            println!(
+                "✅ dns          enabled   {} via {}",
+                cfg.dns.name, cfg.dns.server
+            );
         } else {
             println!(
                 "⚠️  dns          enabled   DNS probe failed: {} via {}",

@@ -1,116 +1,114 @@
+
 .TH WATCHGUARD 8 "2026-07-03" "watchguard 1.0.0" "System Administration"
 .SH NAME
-watchguard \- host health monitor for SSH, OOM, network, and DNS
+watchguard \- plugin-based host health monitor for systemd Linux servers
 
 .SH SYNOPSIS
-.B watchguard daemon
-[\-\-config /etc/watchguard/config.toml]
-
-.B watchguard status
-[\-\-config /etc/watchguard/config.toml]
-
-.B watchguard doctor
-[\-\-config /etc/watchguard/config.toml]
-
-.B watchguard enable
-.IR plugin
-
-.B watchguard disable
-.IR plugin
-[\-\-remove]
-
-.B watchguard config
-.IR command
+.B watchguard
+.I COMMAND
+.RI [ OPTIONS ]
 
 .SH DESCRIPTION
-Watchguard is a plugin-based host health monitor designed for systemd Linux hosts.
+.B watchguard
+is a lightweight Rust-based host health monitor for systemd Linux servers.
 
-It can monitor:
-.IP \(bu 2
-OOM events through journalctl kernel log following
-.IP \(bu 2
-sshd service state through systemd D-Bus
-.IP \(bu 2
-SSH target reachability through TCP probes
-.IP \(bu 2
-Outbound network reachability through TCP probes
-.IP \(bu 2
-DNS resolution through direct DNS queries
+It can monitor SSH service health, SSH TCP reachability, outbound network reachability, DNS resolution, and OOM events observed through journald.
 
-Watchguard supports boot grace and reboot cooldown failsafes to prevent reboot storms.
+Watchguard can restart SSH or reboot the host depending on configuration. Reboot actions are protected by boot grace and reboot cooldown settings.
+
+By default, all plugin sections are present in the configuration but disabled. This makes a fresh install safe until the administrator explicitly enables checks.
+
+.SH COMMANDS
+.TP
+.B watchguard daemon [--config PATH]
+Run Watchguard as a foreground daemon. This is normally started by systemd.
+
+.TP
+.B watchguard status [--config PATH]
+Show enabled plugins and current probe status.
+
+.TP
+.B watchguard doctor [--config PATH]
+Run diagnostic checks for config syntax, required commands, systemd, journald, and enabled plugin prerequisites.
+
+.TP
+.B watchguard test [--config PATH] [--all]
+Run plugin probes once and exit. By default, only enabled plugins are tested. With
+.BR --all ,
+all configured plugins are tested even if they are disabled.
+
+.TP
+.B watchguard logs [--unit UNIT] [--since TIME] [-n LINES] [-b|--boot] [--no-follow]
+Show Watchguard logs through journalctl. By default this follows
+.BR watchguard.service .
+
+.TP
+.B watchguard version
+Print Watchguard version and build metadata.
+
+.TP
+.B watchguard enable PLUGIN [--config PATH]
+Enable a plugin or sub-check.
+
+.TP
+.B watchguard disable PLUGIN [--remove] [--config PATH]
+Disable a plugin or sub-check. With
+.BR --remove ,
+remove the plugin configuration table.
+
+.TP
+.B watchguard config init [--force] [--config PATH]
+Create a default configuration file.
+
+.TP
+.B watchguard config show [--config PATH]
+Print the active configuration.
+
+.TP
+.B watchguard config validate [--config PATH]
+Validate the configuration file.
+
+.TP
+.B watchguard config edit [--config PATH]
+Open the configuration in
+.BR $EDITOR ,
+or
+.B vi
+if EDITOR is unset.
 
 .SH PLUGINS
 .TP
 .B ssh
-Monitors sshd service state and SSH TCP target reachability.
+Enables both SSH service and SSH target checks.
 
 .TP
 .B ssh-service
-Enables or disables only the sshd service-state test.
+Enables or disables only the systemd SSH service-state check.
 
 .TP
 .B ssh-targets
-Enables or disables only the SSH target reachability test.
+Enables or disables only SSH TCP target reachability checks.
 
 .TP
 .B network
-Monitors outbound TCP reachability.
+Checks outbound TCP reachability to configured targets.
 
 .TP
 .B dns
-Monitors DNS resolution.
+Checks DNS resolution through a configured DNS server.
 
 .TP
 .B oom
-Monitors OOM messages from journalctl.
-
-.SH COMMANDS
-.TP
-.B watchguard daemon
-Runs the Watchguard daemon.
-
-.TP
-.B watchguard status
-Prints enabled plugins and current status.
-
-.TP
-.B watchguard doctor
-Runs environment, config, and live probe diagnostics.
-
-.TP
-.B watchguard enable ssh
-Enables the SSH plugin.
-
-.TP
-.B watchguard disable ssh
-Disables the SSH plugin while preserving its config.
-
-.TP
-.B watchguard disable ssh --remove
-Removes the SSH plugin config table.
-
-.TP
-.B watchguard config init
-Creates the default configuration file.
-
-.TP
-.B watchguard config validate
-Validates the configuration.
-
-.TP
-.B watchguard config show
-Prints the configuration.
-
-.TP
-.B watchguard config edit
-Opens the configuration in $EDITOR, or vi if unset.
+Watches journald for OOM messages.
 
 .SH CONFIGURATION
-Default config path:
+The default configuration file is:
 
-.I /etc/watchguard/config.toml
+.EX
+/etc/watchguard/config.toml
+.EE
 
-Durations use human-readable values:
+Durations use human-readable strings:
 
 .EX
 500ms
@@ -122,6 +120,234 @@ Durations use human-readable values:
 1h
 .EE
 
+.SH GLOBAL CONFIGURATION
+Example:
+
+.EX
+[global]
+log_level = "info"
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+tick = "500ms"
+.EE
+
+.TP
+.B boot_grace_period
+Suppresses reboot actions for a period after Watchguard starts.
+
+.TP
+.B reboot_cooldown
+Suppresses repeated reboot actions after a reboot attempt.
+
+.TP
+.B tick
+Main daemon loop sleep interval.
+
+.SH COMMAND CONFIGURATION
+Example:
+
+.EX
+[commands]
+reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
+restart_ssh = ["/usr/bin/systemctl", "restart", "sshd.service"]
+.EE
+
+On Ubuntu, the SSH service is usually
+.B ssh.service
+rather than
+.BR sshd.service .
+
+.SH OOM PLUGIN
+The OOM plugin follows kernel logs through:
+
+.EX
+journalctl -kf -n0
+.EE
+
+Example:
+
+.EX
+[oom]
+enabled = false
+
+patterns = [
+  "out of memory: kill process",
+  "invoked oom-killer",
+  "oom-killer",
+  "memory cgroup out of memory"
+]
+.EE
+
+Enable:
+
+.EX
+sudo watchguard enable oom
+sudo systemctl restart watchguard.service
+.EE
+
+.SH SSH PLUGIN
+Example:
+
+.EX
+[ssh]
+enabled = false
+
+service_check_enabled = true
+service = "sshd.service"
+service_check_interval = "2s"
+service_fail_limit = 3
+service_failure_action = "restart"
+
+target_check_enabled = true
+ssh_check_interval = "5s"
+ssh_timeout = "1500ms"
+ssh_fail_limit = 3
+require_all = false
+
+targets = [
+  "127.0.0.1:22"
+]
+
+ssh_failure_action = "restart"
+.EE
+
+Enable:
+
+.EX
+sudo watchguard enable ssh
+sudo systemctl restart watchguard.service
+.EE
+
+If
+.B watchguard test --all
+reports a
+.B GetUnit
+error, the configured SSH service name probably does not exist. Check:
+
+.EX
+systemctl status sshd.service
+systemctl status ssh.service
+systemctl list-unit-files | grep -E '^ssh|^sshd'
+.EE
+
+.SH NETWORK PLUGIN
+Example:
+
+.EX
+[network]
+enabled = false
+
+check_interval = "5s"
+timeout = "1500ms"
+fail_limit = 6
+require_all = false
+
+targets = [
+  "1.1.1.1:443",
+  "8.8.8.8:443"
+]
+
+failure_action = "none"
+.EE
+
+Enable:
+
+.EX
+sudo watchguard enable network
+sudo systemctl restart watchguard.service
+.EE
+
+Only set
+.B failure_action = "reboot"
+after validating that the targets are reliable for the host.
+
+.SH DNS PLUGIN
+Example:
+
+.EX
+[dns]
+enabled = false
+
+check_interval = "30s"
+fail_limit = 6
+
+server = "1.1.1.1:53"
+name = "example.com"
+
+failure_action = "none"
+.EE
+
+Enable:
+
+.EX
+sudo watchguard enable dns
+sudo systemctl restart watchguard.service
+.EE
+
+.SH LOGS
+Follow logs:
+
+.EX
+watchguard logs
+.EE
+
+Show current boot logs without following:
+
+.EX
+watchguard logs --boot --no-follow
+.EE
+
+Show recent logs:
+
+.EX
+watchguard logs --since "1 hour ago"
+.EE
+
+Equivalent journalctl command:
+
+.EX
+journalctl -u watchguard.service -f
+.EE
+
+.SH EXAMPLES
+Run diagnostics:
+
+.EX
+watchguard doctor
+.EE
+
+Test enabled plugins:
+
+.EX
+watchguard test
+.EE
+
+Test all configured plugins:
+
+.EX
+watchguard test --all
+.EE
+
+Enable SSH monitoring:
+
+.EX
+sudo watchguard enable ssh
+sudo systemctl restart watchguard.service
+.EE
+
+Enable OOM monitoring:
+
+.EX
+sudo watchguard enable oom
+sudo systemctl restart watchguard.service
+.EE
+
+Show version:
+
+.EX
+watchguard version
+.EE
+
 .SH FILES
 .TP
 .I /usr/bin/watchguard
@@ -129,46 +355,52 @@ Watchguard binary.
 
 .TP
 .I /etc/watchguard/config.toml
-Watchguard configuration.
+Default configuration file.
 
 .TP
 .I /usr/lib/systemd/system/watchguard.service
-systemd service unit.
+Packaged systemd unit file.
 
-.SH LOGS
-View daemon logs with:
+.TP
+.I /etc/systemd/system/watchguard.service
+Common path for manual systemd unit installation.
+
+.TP
+.I /usr/share/man/man8/watchguard.8
+Manual page.
+
+.SH EXIT STATUS
+.TP
+.B 0
+Command completed successfully.
+
+.TP
+.B non-zero
+A command failed, a probe failed, or the configuration was invalid.
+
+.SH TROUBLESHOOTING
+.TP
+.B watchguard test --all fails disabled checks
+This is expected. The
+.B --all
+flag tests configured plugins even when disabled. Use
+.B watchguard test
+to test only enabled plugins.
+
+.TP
+.B SSH service GetUnit error
+The configured systemd unit does not exist. Check whether the host uses
+.B sshd.service
+or
+.BR ssh.service .
+
+.TP
+.B SSH target probe failed
+Check whether port 22 is listening:
 
 .EX
-journalctl -u watchguard -f
-.EE
-
-.SH EXAMPLES
-Enable SSH monitoring:
-
-.EX
-watchguard enable ssh
-systemctl restart watchguard
-.EE
-
-Run diagnostics:
-
-.EX
-watchguard doctor
-.EE
-
-Enable network monitoring:
-
-.EX
-watchguard enable network
-watchguard status
-.EE
-
-Enable OOM monitoring:
-
-.EX
-watchguard enable oom
-systemctl restart watchguard
+ss -tlnp | grep ':22'
 .EE
 
 .SH AUTHOR
-Watchguard project
+Solaris17

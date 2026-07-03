@@ -409,7 +409,9 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
     }
 
     if cfg.oom.enabled && cfg.oom.patterns.is_empty() {
-        return Err(anyhow!("oom.patterns must not be empty when oom.enabled=true"));
+        return Err(anyhow!(
+            "oom.patterns must not be empty when oom.enabled=true"
+        ));
     }
 
     if cfg.ssh.enabled {
@@ -587,8 +589,7 @@ fn write_string_to_file(path: &Path, content: &str) -> Result<()> {
             .with_context(|| format!("creating directory {}", parent.display()))?;
     }
 
-    fs::write(path, content)
-        .with_context(|| format!("writing {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("writing {}", path.display()))?;
 
     Ok(())
 }
