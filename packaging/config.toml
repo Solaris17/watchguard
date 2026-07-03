@@ -1,0 +1,85 @@
+# Watchguard configuration
+#
+# Durations use human-readable syntax:
+#   500ms, 2s, 30s, 1m, 5m, 30m, 1h
+#
+# Enable plugins with:
+#   watchguard enable ssh
+#   watchguard enable network
+#   watchguard enable dns
+#   watchguard enable oom
+#
+# Disable plugins with:
+#   watchguard disable ssh
+#
+# Remove plugin config entirely with:
+#   watchguard disable ssh --remove
+
+[global]
+log_level = "info"
+
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+
+tick = "500ms"
+
+[commands]
+reboot = ["/usr/bin/systemctl", "reboot", "--force", "--force"]
+restart_ssh = ["/usr/bin/systemctl", "restart", "sshd.service"]
+
+[oom]
+enabled = false
+
+patterns = [
+  "out of memory: kill process",
+  "invoked oom-killer",
+  "oom-killer",
+  "memory cgroup out of memory"
+]
+
+[ssh]
+enabled = false
+
+service_check_enabled = true
+service = "sshd.service"
+service_check_interval = "2s"
+service_fail_limit = 3
+service_failure_action = "restart"
+
+target_check_enabled = true
+ssh_check_interval = "5s"
+ssh_timeout = "1500ms"
+ssh_fail_limit = 3
+require_all = false
+
+targets = [
+  "127.0.0.1:22"
+]
+
+ssh_failure_action = "restart"
+
+[network]
+enabled = false
+
+check_interval = "5s"
+timeout = "1500ms"
+fail_limit = 6
+require_all = false
+
+targets = [
+  "1.1.1.1:443",
+  "8.8.8.8:443"
+]
+
+failure_action = "none"
+
+[dns]
+enabled = false
+
+check_interval = "30s"
+fail_limit = 6
+
+server = "1.1.1.1:53"
+name = "example.com"
+
+failure_action = "none"

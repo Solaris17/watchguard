@@ -1,0 +1,174 @@
+.TH WATCHGUARD 8 "2026-07-03" "watchguard 1.0.0" "System Administration"
+.SH NAME
+watchguard \- host health monitor for SSH, OOM, network, and DNS
+
+.SH SYNOPSIS
+.B watchguard daemon
+[\-\-config /etc/watchguard/config.toml]
+
+.B watchguard status
+[\-\-config /etc/watchguard/config.toml]
+
+.B watchguard doctor
+[\-\-config /etc/watchguard/config.toml]
+
+.B watchguard enable
+.IR plugin
+
+.B watchguard disable
+.IR plugin
+[\-\-remove]
+
+.B watchguard config
+.IR command
+
+.SH DESCRIPTION
+Watchguard is a plugin-based host health monitor designed for systemd Linux hosts.
+
+It can monitor:
+.IP \(bu 2
+OOM events through journalctl kernel log following
+.IP \(bu 2
+sshd service state through systemd D-Bus
+.IP \(bu 2
+SSH target reachability through TCP probes
+.IP \(bu 2
+Outbound network reachability through TCP probes
+.IP \(bu 2
+DNS resolution through direct DNS queries
+
+Watchguard supports boot grace and reboot cooldown failsafes to prevent reboot storms.
+
+.SH PLUGINS
+.TP
+.B ssh
+Monitors sshd service state and SSH TCP target reachability.
+
+.TP
+.B ssh-service
+Enables or disables only the sshd service-state test.
+
+.TP
+.B ssh-targets
+Enables or disables only the SSH target reachability test.
+
+.TP
+.B network
+Monitors outbound TCP reachability.
+
+.TP
+.B dns
+Monitors DNS resolution.
+
+.TP
+.B oom
+Monitors OOM messages from journalctl.
+
+.SH COMMANDS
+.TP
+.B watchguard daemon
+Runs the Watchguard daemon.
+
+.TP
+.B watchguard status
+Prints enabled plugins and current status.
+
+.TP
+.B watchguard doctor
+Runs environment, config, and live probe diagnostics.
+
+.TP
+.B watchguard enable ssh
+Enables the SSH plugin.
+
+.TP
+.B watchguard disable ssh
+Disables the SSH plugin while preserving its config.
+
+.TP
+.B watchguard disable ssh --remove
+Removes the SSH plugin config table.
+
+.TP
+.B watchguard config init
+Creates the default configuration file.
+
+.TP
+.B watchguard config validate
+Validates the configuration.
+
+.TP
+.B watchguard config show
+Prints the configuration.
+
+.TP
+.B watchguard config edit
+Opens the configuration in $EDITOR, or vi if unset.
+
+.SH CONFIGURATION
+Default config path:
+
+.I /etc/watchguard/config.toml
+
+Durations use human-readable values:
+
+.EX
+500ms
+2s
+30s
+1m
+5m
+30m
+1h
+.EE
+
+.SH FILES
+.TP
+.I /usr/bin/watchguard
+Watchguard binary.
+
+.TP
+.I /etc/watchguard/config.toml
+Watchguard configuration.
+
+.TP
+.I /usr/lib/systemd/system/watchguard.service
+systemd service unit.
+
+.SH LOGS
+View daemon logs with:
+
+.EX
+journalctl -u watchguard -f
+.EE
+
+.SH EXAMPLES
+Enable SSH monitoring:
+
+.EX
+watchguard enable ssh
+systemctl restart watchguard
+.EE
+
+Run diagnostics:
+
+.EX
+watchguard doctor
+.EE
+
+Enable network monitoring:
+
+.EX
+watchguard enable network
+watchguard status
+.EE
+
+Enable OOM monitoring:
+
+.EX
+watchguard enable oom
+systemctl restart watchguard
+.EE
+
+.SH AUTHOR
+Watchguard project

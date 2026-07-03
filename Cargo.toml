@@ -1,0 +1,21 @@
+[package]
+name = "watchguard"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1.2+spec-1.1.0"
+toml_edit = "0.25.12+spec-1.1.0"
+humantime-serde = "1.1"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-journald = "0.3"
+
+zbus = "5.16.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+trust-dns-client = "0.23"

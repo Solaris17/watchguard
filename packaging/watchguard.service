@@ -1,0 +1,22 @@
+[Unit]
+Description=Watchguard Host Health Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/watchguard daemon --config /etc/watchguard/config.toml
+
+Restart=on-failure
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
