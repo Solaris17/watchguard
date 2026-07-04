@@ -74,7 +74,11 @@ pub fn cmd_doctor(config_path: &str) -> Result<()> {
     match state::ensure_state_dir() {
         Ok(()) => println!("✅ State directory ready: {}", state::STATE_DIR),
         Err(e) => {
-            println!("⚠️  State directory not writable: {} ({:#})", state::STATE_DIR, e);
+            println!(
+                "⚠️  State directory not writable: {} ({:#})",
+                state::STATE_DIR,
+                e
+            );
             warnings += 1;
         }
     }

@@ -1,0 +1,11 @@
+Package: watchguard
+Version: 1.0.2
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: Solaris17 <solaris17@outlook.com>
+Depends: systemd
+Description: Watchguard host health monitor
+ Watchguard monitors host health using systemd, journald, SSH, network,
+ DNS, and OOM checks with configurable remediation actions, persistent
+ state, and journald logging.

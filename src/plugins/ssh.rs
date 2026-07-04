@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
@@ -144,14 +143,12 @@ impl Plugin for SshServicePlugin {
         let suffix = configured_resolved_suffix(&self.cfg.service, &service);
 
         match self.probe(rt) {
-            Ok(true) => PluginStatus::healthy(
-                self.id(),
-                format!("{} is active ({})", service, suffix),
-            ),
-            Ok(false) => PluginStatus::warning(
-                self.id(),
-                format!("{} is not active ({})", service, suffix),
-            ),
+            Ok(true) => {
+                PluginStatus::healthy(self.id(), format!("{} is active ({})", service, suffix))
+            }
+            Ok(false) => {
+                PluginStatus::warning(self.id(), format!("{} is not active ({})", service, suffix))
+            }
             Err(e) => PluginStatus::warning(
                 self.id(),
                 format!("status error for {} ({}): {:#}", service, suffix, e),
@@ -164,8 +161,12 @@ impl Plugin for SshServicePlugin {
         let suffix = configured_resolved_suffix(&self.cfg.service, &service);
 
         match self.probe(rt) {
-            Ok(true) => PluginStatus::healthy(self.id(), format!("{} active ({})", service, suffix)),
-            Ok(false) => PluginStatus::failed(self.id(), format!("{} not active ({})", service, suffix)),
+            Ok(true) => {
+                PluginStatus::healthy(self.id(), format!("{} active ({})", service, suffix))
+            }
+            Ok(false) => {
+                PluginStatus::failed(self.id(), format!("{} not active ({})", service, suffix))
+            }
             Err(e) => PluginStatus::failed(
                 self.id(),
                 format!("error for {} ({}): {:#}", service, suffix, e),

@@ -24,11 +24,16 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
     );
 
     match state::ensure_state_dir() {
-        Ok(()) => info!(path = state::STATE_DIR, "state directory ready: path={}",
-        state::STATE_DIR),
-        Err(e) => warn!(path = state::STATE_DIR, error = ?e, "state directory not ready; remediation history may not persist: path={} error={:?}",
+        Ok(()) => info!(
+            path = state::STATE_DIR,
+            "state directory ready: path={}",
+            state::STATE_DIR
+        ),
+        Err(e) => {
+            warn!(path = state::STATE_DIR, error = ?e, "state directory not ready; remediation history may not persist: path={} error={:?}",
             state::STATE_DIR,
-            e),
+            e)
+        }
     }
 
     let rt = Runtime::new().context("creating Tokio runtime")?;
@@ -74,7 +79,14 @@ pub fn daemon_loop(config_path: &str) -> Result<()> {
                     failures,
                     message,
                 } => {
-                    info!(plugin, failures, "plugin recovered: plugin={} failures={} message={}", plugin, failures, message);
+                    info!(
+                        plugin,
+                        failures,
+                        "plugin recovered: plugin={} failures={} message={}",
+                        plugin,
+                        failures,
+                        message
+                    );
                 }
 
                 TickOutcome::Failure {

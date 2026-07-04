@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -209,10 +208,22 @@ pub fn cmd_state() -> Result<()> {
     println!();
     println!("Stats");
     println!("  Total events          : {}", state.stats.total_events);
-    println!("  Remediation started   : {}", state.stats.remediation_started);
-    println!("  Remediation succeeded : {}", state.stats.remediation_succeeded);
-    println!("  Remediation failed    : {}", state.stats.remediation_failed);
-    println!("  Remediation suppressed: {}", state.stats.remediation_suppressed);
+    println!(
+        "  Remediation started   : {}",
+        state.stats.remediation_started
+    );
+    println!(
+        "  Remediation succeeded : {}",
+        state.stats.remediation_succeeded
+    );
+    println!(
+        "  Remediation failed    : {}",
+        state.stats.remediation_failed
+    );
+    println!(
+        "  Remediation suppressed: {}",
+        state.stats.remediation_suppressed
+    );
     println!("  Reboot requests       : {}", state.stats.reboot_requests);
     println!("  OOM events            : {}", state.stats.oom_events);
     println!();

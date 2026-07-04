@@ -57,4 +57,4 @@ install -dpm 0755 %{buildroot}/var/lib/watchguard
 
 %changelog
 * Fri Jul 03 2026 Watchguard Project <root@localhost> - 1.0.2-1
-
+- Added support for Debian.
