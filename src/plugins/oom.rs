@@ -24,6 +24,145 @@ pub fn journalctl_exists() -> bool {
     util::command_exists("/usr/bin/journalctl")
 }
 
+
+#[derive(Debug, Clone)]
+struct ContainerOomMatch {
+    runtime: &'static str,
+    id: Option<String>,
+}
+
+fn collect_recent_kernel_context(window: Duration, lines: usize) -> Result<String> {
+    let since = format!("{} seconds ago", window.as_secs().max(1));
+
+    let output = Command::new("/usr/bin/journalctl")
+        .arg("-k")
+        .arg("--since")
+        .arg(&since)
+        .arg("-n")
+        .arg(lines.to_string())
+        .arg("-o")
+        .arg("short-iso")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("collecting recent kernel journal context for OOM classification")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "journalctl context collection failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn classify_container_oom(context: &str) -> Option<ContainerOomMatch> {
+    let lower = context.to_lowercase();
+
+    // Important: mem_cgroup_out_of_memory by itself is NOT container-only.
+    // It only proves that the OOM happened through the memory-cgroup path.
+    // We suppress the host reboot only when the OOM is cgroup-scoped AND
+    // that cgroup path clearly belongs to a container workload/runtime.
+    if lower.contains("constraint=constraint_none") {
+        return None;
+    }
+
+    let is_cgroup_oom = lower.contains("constraint=constraint_memcg")
+        || lower.contains("mem_cgroup_out_of_memory")
+        || lower.contains("memory cgroup out of memory")
+        || lower.contains("memory cgroup stats for ")
+        || lower.contains("oom_memcg=")
+        || lower.contains("task_memcg=");
+
+    if !is_cgroup_oom {
+        return None;
+    }
+
+    let docker_id = extract_container_id(&lower, "docker-");
+    let docker_cgroup = lower.contains("memory cgroup stats for /system.slice/docker-")
+        || lower.contains("oom_memcg=/system.slice/docker-")
+        || lower.contains("task_memcg=/system.slice/docker-")
+        || lower.contains("memory cgroup stats for /docker/")
+        || lower.contains("oom_memcg=/docker/")
+        || lower.contains("task_memcg=/docker/")
+        || (docker_id.is_some() && lower.contains(".scope"));
+
+    if docker_cgroup {
+        return Some(ContainerOomMatch {
+            runtime: "docker",
+            id: docker_id,
+        });
+    }
+
+    let kubernetes_cgroup = lower.contains("memory cgroup stats for /kubepods")
+        || lower.contains("oom_memcg=/kubepods")
+        || lower.contains("task_memcg=/kubepods")
+        || lower.contains("/kubepods.slice/")
+        || lower.contains("kubepods-");
+
+    if kubernetes_cgroup {
+        return Some(ContainerOomMatch {
+            runtime: "kubernetes",
+            id: extract_container_id(&lower, "cri-containerd-"),
+        });
+    }
+
+    let containerd_id = extract_container_id(&lower, "cri-containerd-");
+    let containerd_cgroup = lower.contains("memory cgroup stats for /system.slice/cri-containerd-")
+        || lower.contains("oom_memcg=/system.slice/cri-containerd-")
+        || lower.contains("task_memcg=/system.slice/cri-containerd-")
+        || (containerd_id.is_some() && lower.contains(".scope"));
+
+    if containerd_cgroup {
+        return Some(ContainerOomMatch {
+            runtime: "containerd",
+            id: containerd_id,
+        });
+    }
+
+    let podman_id = extract_container_id(&lower, "libpod-");
+    let podman_cgroup = lower.contains("memory cgroup stats for /machine.slice/libpod-")
+        || lower.contains("oom_memcg=/machine.slice/libpod-")
+        || lower.contains("task_memcg=/machine.slice/libpod-")
+        || (podman_id.is_some() && lower.contains(".scope"));
+
+    if podman_cgroup {
+        return Some(ContainerOomMatch {
+            runtime: "podman",
+            id: podman_id,
+        });
+    }
+
+    None
+}
+
+fn extract_container_id(context: &str, prefix: &str) -> Option<String> {
+    let start = context.find(prefix)? + prefix.len();
+    let id: String = context[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit())
+        .take(64)
+        .collect();
+
+    if id.len() >= 12 {
+        Some(id)
+    } else {
+        None
+    }
+}
+
+fn compact_context(context: &str, max_lines: usize) -> String {
+    let mut lines: Vec<&str> = context.lines().collect();
+
+    if lines.len() > max_lines {
+        lines = lines.split_off(lines.len() - max_lines);
+    }
+
+    lines.join("\n")
+}
+
 pub fn spawn_watcher(
     patterns: Vec<String>,
     debounce: Duration,
@@ -201,7 +340,7 @@ impl Plugin for OomPlugin {
     }
 
     fn description(&self) -> &'static str {
-        "Watches kernel journald messages for OOM events and immediately requests reboot"
+        "Watches kernel journald messages for OOM events and suppresses reboot only for container OOMs"
     }
 
     fn enabled(&self) -> bool {
@@ -218,7 +357,7 @@ impl Plugin for OomPlugin {
 
     fn remediation_summary(&self) -> Option<String> {
         Some(format!(
-            "reboot immediately on first matched kernel OOM journal event; debounce {:?}",
+            "reboot on matched OOM journal event unless recent kernel context proves container OOM; debounce {:?}",
             self.cfg.debounce
         ))
     }
@@ -267,7 +406,7 @@ impl Plugin for OomPlugin {
         PluginStatus::healthy(
             self.id(),
             format!(
-                "event-immediate reboot configured, {} pattern(s), debounce {:?}",
+                "event-immediate reboot configured, container OOM suppress enabled, {} pattern(s), debounce {:?}",
                 self.cfg.patterns.len(),
                 self.cfg.debounce
             ),
@@ -340,27 +479,84 @@ impl Plugin for OomPlugin {
         }
 
         if event_count > 0 {
-            let details = first_line
-                .as_deref()
-                .map(|line| format!("matched kernel journal line: {}", line));
+            // Give the kernel/journald a moment to finish emitting the OOM dump.
+            // The first matching line is often only "invoked oom-killer"; the
+            // container/cgroup path usually appears a few lines later.
+            thread::sleep(Duration::from_secs(2));
 
-            warn!(
-                plugin = self.id(),
-                event_count,
-                details = ?details,
-            "OOM event detected; immediate reboot remediation requested: event_count={} details={:?}",
-                event_count,
-                details
-            );
+            let mut context = first_line.clone().unwrap_or_default();
 
-            TickOutcome::Failure {
-                plugin: self.id(),
-                failures: 1,
-                limit: 1,
-                error: None,
-                action: Some(ActionPlan::from_action(Action::Reboot)),
-                reason: self.failure_reason(),
-                details,
+            match collect_recent_kernel_context(Duration::from_secs(120), 400) {
+                Ok(extra) => {
+                    if !context.is_empty() {
+                        context.push('\n');
+                    }
+                    context.push_str(&extra);
+                }
+                Err(e) => {
+                    warn!(
+                        target = "oom",
+                        error = %format!("{:#}", e),
+                        "failed to collect OOM context; defaulting to configured reboot behavior"
+                    );
+                }
+            }
+
+            if let Some(container) = classify_container_oom(&context) {
+                let details = Some(format!(
+                    "matched kernel journal line: {}; classification=container_oom runtime={} container_id={}; host reboot suppressed; context:\n{}",
+                    first_line.as_deref().unwrap_or("<unknown>"),
+                    container.runtime,
+                    container.id.as_deref().unwrap_or("unknown"),
+                    compact_context(&context, 80)
+                ));
+
+                warn!(
+                    plugin = self.id(),
+                    event_count,
+                    runtime = container.runtime,
+                    container_id = container.id.as_deref().unwrap_or("unknown"),
+                    details = ?details,
+                    "OOM event classified as container OOM; host reboot suppressed: event_count={} runtime={} container_id={}",
+                    event_count,
+                    container.runtime,
+                    container.id.as_deref().unwrap_or("unknown")
+                );
+
+                TickOutcome::Failure {
+                    plugin: self.id(),
+                    failures: 1,
+                    limit: 1,
+                    error: None,
+                    action: None,
+                    reason: "Container OOM detected in kernel journal",
+                    details,
+                }
+            } else {
+                let details = Some(format!(
+                    "matched kernel journal line: {}; classification=non_container_or_unknown_oom; reboot allowed; context:\n{}",
+                    first_line.as_deref().unwrap_or("<unknown>"),
+                    compact_context(&context, 80)
+                ));
+
+                warn!(
+                    plugin = self.id(),
+                    event_count,
+                    details = ?details,
+                    "OOM event did not match container runtime markers; reboot remediation requested: event_count={} details={:?}",
+                    event_count,
+                    details
+                );
+
+                TickOutcome::Failure {
+                    plugin: self.id(),
+                    failures: 1,
+                    limit: 1,
+                    error: None,
+                    action: Some(ActionPlan::from_action(Action::Reboot)),
+                    reason: self.failure_reason(),
+                    details,
+                }
             }
         } else {
             TickOutcome::Idle
