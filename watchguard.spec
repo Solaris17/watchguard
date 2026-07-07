@@ -1,5 +1,5 @@
 Name:           watchguard
-Version:        1.0.2
+Version:        1.0.3
 Release:        1%{?dist}
 Summary:        Plugin-based host health monitor daemon
 License:        MIT
