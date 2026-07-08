@@ -1,0 +1,382 @@
+.TH WATCHGUARD 8 "2026-07-03" "watchguard 1.0.0" "System Administration"
+.SH NAME
+watchguard \- plugin-based host health monitor for systemd Linux servers
+
+.SH SYNOPSIS
+.B watchguard
+.I COMMAND
+.RI [ OPTIONS ]
+
+.SH DESCRIPTION
+.B watchguard
+is a lightweight Rust-based host health monitor for systemd Linux servers.
+
+It can monitor SSH service health, SSH TCP reachability, outbound network reachability, DNS resolution, and OOM events observed through journald.
+
+Watchguard can restart services, run commands, or reboot the host depending on configuration. Reboot actions are protected by boot grace and reboot cooldown settings.
+
+.SH ACTIONS
+Watchguard uses a generic action engine. Polling checks use escalation steps. OOM is event-driven and immediately requests reboot on the first matched OOM journal event.
+
+Supported actions are:
+
+.TP
+.B none
+Log only; take no remediation.
+
+.TP
+.B restart_service
+Restart a configured systemd service. Requires a
+.B service
+field in the escalation step.
+
+.TP
+.B run_command
+Run a configured command vector. Requires a
+.B command
+field in the escalation step.
+
+.TP
+.B reboot
+Run the configured
+.B commands.reboot
+command, subject to boot grace and reboot cooldown.
+
+.SH ESCALATION
+Polling checks use escalation lists. OOM does not use an escalation list; it immediately requests reboot when an OOM journal event is matched.
+
+Escalation example:
+
+.EX
+failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "example.service" },
+  { after_failures = 6, action = "run_command", command = ["/usr/local/bin/fix-example"] },
+  { after_failures = 9, action = "reboot" }
+]
+.EE
+
+This means:
+
+.EX
+3 consecutive failures -> restart service
+6 consecutive failures -> run command
+9 consecutive failures -> reboot
+success -> counter resets
+.EE
+
+After the final escalation step has fired, Watchguard repeats the final step periodically using the final step threshold while the failure remains unresolved.
+
+.SH COMMANDS
+.TP
+.B watchguard daemon [--config PATH]
+Run Watchguard as a foreground daemon. This is normally started by systemd.
+
+.TP
+.B watchguard status [--config PATH]
+Show registered plugins and current probe status.
+
+.TP
+.B watchguard doctor [--config PATH]
+Run diagnostic checks for config syntax, required commands, systemd, journald, and plugin prerequisites.
+
+.TP
+.B watchguard test [--config PATH] [--all]
+Run plugin probes once and exit. By default, only enabled plugins are tested. With
+.BR --all ,
+all configured plugins are tested even if disabled.
+
+.TP
+.B watchguard plugins [--config PATH]
+List registered plugins, metadata, enabled state, and remediation policies.
+
+.TP
+.B watchguard state
+Show persistent Watchguard state from /var/lib/watchguard/state.json.
+
+.TP
+.B watchguard history [-n LINES]
+Show persistent remediation history.
+
+.TP
+.B watchguard logs [--unit UNIT] [--since TIME] [-n LINES] [-b|--boot] [--no-follow]
+Show Watchguard logs through journalctl.
+
+.TP
+.B watchguard version
+Print Watchguard version and build metadata.
+
+.TP
+.B watchguard enable PLUGIN [--config PATH]
+Enable a plugin or sub-check.
+
+.TP
+.B watchguard disable PLUGIN [--remove] [--config PATH]
+Disable a plugin or sub-check.
+
+.SH PLUGINS
+.TP
+.B oom
+Watches journald for OOM messages and immediately requests reboot on first match, subject to boot grace and reboot cooldown.
+
+.TP
+.B ssh-service
+Checks the configured systemd SSH service unit.
+
+.TP
+.B ssh-targets
+Checks SSH TCP target reachability.
+
+.TP
+.B network
+Checks outbound TCP reachability to configured targets.
+
+.TP
+.B dns
+Checks DNS resolution through a configured DNS server.
+
+.SH SSH ESCALATION DEFAULTS
+Packaged SSH defaults:
+
+.EX
+service_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+
+ssh_failure_actions = [
+  { after_failures = 3, action = "restart_service", service = "sshd.service" },
+  { after_failures = 6, action = "restart_service", service = "sshd.service" },
+  { after_failures = 9, action = "reboot" }
+]
+.EE
+
+All plugins are disabled by default, so these actions only apply after SSH monitoring is enabled.
+
+.SH NETWORK AND DNS SAFE DEFAULTS
+Network and DNS remain conservative by default:
+
+.EX
+failure_actions = [
+  { after_failures = 6, action = "none" }
+]
+.EE
+
+Example network escalation:
+
+.EX
+failure_actions = [
+  { after_failures = 6, action = "restart_service", service = "NetworkManager.service" },
+  { after_failures = 12, action = "reboot" }
+]
+.EE
+
+Example DNS escalation:
+
+.EX
+failure_actions = [
+  { after_failures = 3, action = "run_command", command = ["/usr/bin/systemctl", "restart", "systemd-resolved.service"] },
+  { after_failures = 9, action = "reboot" }
+]
+.EE
+
+Only use reboot escalation after validating targets.
+
+.SH OOM IMMEDIATE REBOOT POLICY
+OOM is intentionally different from SSH, network, and DNS checks. It is event-driven instead of failure-count driven.
+
+.EX
+[oom]
+enabled = true
+debounce = "5s"
+.EE
+
+When Watchguard sees a configured OOM journal pattern, it immediately requests reboot. The reboot request is still protected by:
+
+.EX
+boot_grace_period = "5m"
+reboot_cooldown = "30m"
+.EE
+
+There is no failure_actions list for OOM.
+
+
+.SH LOGGING
+Watchguard logs to journald through the
+.B watchguard.service
+unit.
+
+Useful commands:
+
+.EX
+watchguard logs
+watchguard logs --boot --no-follow
+journalctl -u watchguard.service -f
+.EE
+
+Watchguard logs daemon startup, plugin registration, plugin failures, recoveries, OOM watcher lifecycle, matched OOM journal lines, remediation decisions, remediation command success/failure, and reboot suppression due to boot grace or cooldown.
+
+Successful checks are not logged every tick at normal info level to avoid log spam.
+
+
+.SH STATE DATABASE
+Watchguard writes persistent remediation state to:
+
+.EX
+/var/lib/watchguard/state.json
+.EE
+
+The state database records remediation events including plugin, action, status, reason, command, service, failures, thresholds, reboot requests, and OOM event counts.
+
+View state:
+
+.EX
+watchguard state
+.EE
+
+View history:
+
+.EX
+watchguard history
+watchguard history -n 50
+.EE
+
+The state file is updated before remediation commands execute. This is especially useful for reboot actions because a "started" event should survive after the host comes back up.
+
+The systemd unit uses StateDirectory=watchguard to create /var/lib/watchguard.
+
+
+.SH SSH SERVICE AUTO-DETECTION
+The default SSH service can be configured as:
+
+.EX
+service = "auto"
+.EE
+
+For SSH remediation steps, the service can also be:
+
+.EX
+{ after_failures = 3, action = "restart_service", service = "auto" }
+.EE
+
+At runtime,
+.B auto
+resolves to
+.B sshd.service
+first, then
+.BR ssh.service .
+This allows one default configuration to work on RHEL, Rocky, Alma, Ubuntu, and Debian systems.
+
+Administrators may still hard-code
+.B sshd.service
+or
+.B ssh.service
+if desired.
+
+.SH CONFIGURATION
+The default configuration file is:
+
+.EX
+/etc/watchguard/config.toml
+.EE
+
+Durations use human-readable strings:
+
+.EX
+500ms
+2s
+30s
+1m
+5m
+30m
+1h
+.EE
+
+.SH LOGS
+Follow logs:
+
+.EX
+watchguard logs
+.EE
+
+Show current boot logs without following:
+
+.EX
+watchguard logs --boot --no-follow
+.EE
+
+.SH EXAMPLES
+Run diagnostics:
+
+.EX
+watchguard doctor
+.EE
+
+Show plugins and remediation policies:
+
+.EX
+watchguard plugins
+.EE
+
+Test enabled plugins:
+
+.EX
+watchguard test
+.EE
+
+Test all configured plugins:
+
+.EX
+watchguard test --all
+.EE
+
+Enable SSH monitoring:
+
+.EX
+sudo watchguard enable ssh
+sudo systemctl restart watchguard.service
+.EE
+
+.SH FILES
+.TP
+.I /usr/bin/watchguard
+Watchguard binary.
+
+.TP
+.I /etc/watchguard/config.toml
+Default configuration file.
+
+.TP
+.I /usr/lib/systemd/system/watchguard.service
+Packaged systemd unit file.
+
+.TP
+.I /usr/share/man/man8/watchguard.8
+Manual page.
+
+.TP
+.I /var/lib/watchguard/state.json
+Persistent state database.
+
+.TP
+.I /var/lib/watchguard
+Persistent state directory.
+
+.SH TROUBLESHOOTING
+.TP
+.B watchguard test --all fails disabled checks
+This is expected. The
+.B --all
+flag tests configured plugins even when disabled. Use
+.B watchguard test
+to test only enabled plugins.
+
+.TP
+.B SSH service GetUnit error
+The configured systemd unit does not exist. Check whether the host uses
+.B sshd.service
+or
+.BR ssh.service .
+
+.SH AUTHOR
+Watchguard project
